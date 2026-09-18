@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../core/network/api_error.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/formatter.dart';
 import '../data/cart_store.dart';
-import '../data/dummy/dummy_data.dart';
 import '../data/models/product.dart';
+import '../data/outlet_store.dart';
 import '../widgets/product_card.dart';
 
 /// Halaman detail produk: hero gambar, deskripsi, paket hemat (upsell),
@@ -20,36 +21,63 @@ class ProductDetailPage extends StatefulWidget {
 
 class _ProductDetailPageState extends State<ProductDetailPage> {
   int _qty = 1;
-  final TextEditingController _note = TextEditingController();
 
-  static const int _noteMax = 100;
+  /// True selama permintaan tambah-ke-keranjang berlangsung (cegah dobel-tap).
+  bool _adding = false;
 
-  /// Paket hemat sebagai upsell (produk kategori "Paket").
-  late final List<Product> _upsell = DummyData.products
-      .where((p) => p.category == 'Paket' && p.id != widget.product.id)
-      .toList();
+  Future<void> _addToCart() async {
+    final outletId = outletStore.outletId;
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
 
-  @override
-  void initState() {
-    super.initState();
-    _note.addListener(() => setState(() {}));
-  }
+    if (outletId == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Pilih outlet Panglima dulu sebelum memesan.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
 
-  @override
-  void dispose() {
-    _note.dispose();
-    super.dispose();
-  }
+    final menuId = int.tryParse(widget.product.id);
+    if (menuId == null) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Menu ini belum bisa dipesan.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
 
-  void _addToCart() {
-    cartStore.add(widget.product, qty: _qty, note: _note.text.trim());
-    Navigator.pop(context);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${widget.product.name} ditambahkan ke keranjang'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
+    setState(() => _adding = true);
+    try {
+      await cartStore.add(outletId, menuId: menuId, quantity: _qty);
+      if (!mounted) return;
+      navigator.pop();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('${widget.product.name} ditambahkan ke keranjang'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _adding = false);
+      messenger.showSnackBar(
+        SnackBar(content: Text(e.message), duration: const Duration(seconds: 2)),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _adding = false);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Gagal menambahkan ke keranjang. Coba lagi.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   @override
@@ -61,26 +89,16 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
         slivers: [
           SliverToBoxAdapter(child: _Hero(product: p)),
           SliverToBoxAdapter(child: _Header(product: p)),
-          const SliverToBoxAdapter(child: _Gap()),
-          if (_upsell.isNotEmpty) ...[
-            SliverToBoxAdapter(child: _UpsellSection(items: _upsell)),
-            const SliverToBoxAdapter(child: _Gap()),
-          ],
-          SliverToBoxAdapter(
-            child: _NoteSection(
-              controller: _note,
-              max: _noteMax,
-            ),
-          ),
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
       ),
       bottomNavigationBar: _AddBar(
         qty: _qty,
         total: p.effectivePrice * _qty,
+        loading: _adding,
         onMinus: () => setState(() => _qty = _qty > 1 ? _qty - 1 : 1),
         onPlus: () => setState(() => _qty++),
-        onAdd: _addToCart,
+        onAdd: _adding ? null : _addToCart,
       ),
     );
   }
@@ -223,179 +241,6 @@ class _Header extends StatelessWidget {
     );
   }
 }
-
-// =============================================================================
-// SUPAYA KAMU HEMAT (upsell paket)
-// =============================================================================
-
-class _UpsellSection extends StatelessWidget {
-  const _UpsellSection({required this.items});
-
-  final List<Product> items;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-          child: Text(
-            'Supaya kamu hemat',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textDark,
-            ),
-          ),
-        ),
-        for (int i = 0; i < items.length; i++) ...[
-          if (i > 0) const Divider(height: 1, indent: 16, endIndent: 16),
-          _UpsellTile(product: items[i]),
-        ],
-      ],
-    );
-  }
-}
-
-class _UpsellTile extends StatelessWidget {
-  const _UpsellTile({required this.product});
-
-  final Product product;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ProductDetailPage(product: product),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: SizedBox(
-                width: 52,
-                height: 52,
-                child: ProductImage(imageUrl: product.imageUrl),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    product.name,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textDark,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Text(
-                        formatRupiah(product.effectivePrice),
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textDark,
-                        ),
-                      ),
-                      if (product.isPromo) ...[
-                        const SizedBox(width: 6),
-                        Text(
-                          formatRupiah(product.price),
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: AppColors.grey400,
-                            decoration: TextDecoration.lineThrough,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const Icon(
-              Icons.chevron_right,
-              color: AppColors.gold500,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// =============================================================================
-// CATATAN TAMBAHAN
-// =============================================================================
-
-class _NoteSection extends StatelessWidget {
-  const _NoteSection({required this.controller, required this.max});
-
-  final TextEditingController controller;
-  final int max;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Catatan Tambahan',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.textDark,
-                  ),
-                ),
-              ),
-              Text(
-                '${controller.text.characters.length}/$max',
-                style: TextStyle(fontSize: 12, color: AppColors.grey400),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: controller,
-            maxLength: max,
-            maxLines: 3,
-            minLines: 3,
-            buildCounter: (_, {required currentLength, required isFocused, maxLength}) =>
-                null,
-            decoration: InputDecoration(
-              hintText: 'Ga perlu baper',
-              hintStyle: const TextStyle(color: AppColors.grey400),
-              filled: true,
-              fillColor: AppColors.grey100,
-              contentPadding: const EdgeInsets.all(14),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // =============================================================================
 // BILAH BAWAH: stepper + tombol tambah keranjang
 // =============================================================================
@@ -404,6 +249,7 @@ class _AddBar extends StatelessWidget {
   const _AddBar({
     required this.qty,
     required this.total,
+    required this.loading,
     required this.onMinus,
     required this.onPlus,
     required this.onAdd,
@@ -411,9 +257,10 @@ class _AddBar extends StatelessWidget {
 
   final int qty;
   final int total;
+  final bool loading;
   final VoidCallback onMinus;
   final VoidCallback onPlus;
-  final VoidCallback onAdd;
+  final VoidCallback? onAdd;
 
   @override
   Widget build(BuildContext context) {
@@ -440,16 +287,25 @@ class _AddBar extends StatelessWidget {
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      '+ Keranjang  ${formatRupiah(total)}',
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
+                  child: loading
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: AppColors.white,
+                          ),
+                        )
+                      : FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            '+ Keranjang  ${formatRupiah(total)}',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                 ),
               ),
             ),
@@ -517,15 +373,5 @@ class _StepBtn extends StatelessWidget {
         child: Icon(icon, size: 20, color: AppColors.maroon700),
       ),
     );
-  }
-}
-
-/// Pemisah abu-abu tebal antar-seksi (seperti di gambar).
-class _Gap extends StatelessWidget {
-  const _Gap();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(height: 8, color: AppColors.grey100);
   }
 }

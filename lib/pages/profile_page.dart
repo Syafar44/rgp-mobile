@@ -1,8 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../core/network/api_error.dart';
 import '../core/theme/app_colors.dart';
+import '../data/auth_repository.dart';
+import '../data/auth_store.dart';
 import '../data/dummy/dummy_data.dart';
+import '../data/models/user_account.dart';
+import '../data/models/user_profile.dart';
 import 'address_page.dart';
+import 'auth/email_login_page.dart';
 
 /// Halaman Profile ("Saya") — meniru tata letak Kopi Kenangan:
 /// header sapaan + level/poin, daily check-in, lalu grup menu.
@@ -16,10 +22,50 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   bool _biometric = true;
 
-  /// Tarik-untuk-refresh: muat ulang data (dummy → jeda singkat lalu rebuild).
+  /// Profil dari `GET /me`. Null selama belum termuat / gagal dimuat.
+  UserProfile? _profile;
+  String? _profileError;
+  bool _loadingProfile = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (authStore.isLoggedIn) _loadProfile();
+  }
+
+  /// Ambil `GET /me` lalu selaraskan akun aktif dengan klaim token.
+  Future<void> _loadProfile() async {
+    if (_loadingProfile) return;
+    setState(() {
+      _loadingProfile = true;
+      _profileError = null;
+    });
+    try {
+      final profile = await authRepository.getMe();
+      await authStore.applyProfile(profile);
+      if (!mounted) return;
+      setState(() => _profile = profile);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      // Token kedaluwarsa/tidak sah → keluarkan pengguna, bukan sekadar pesan.
+      if (e.isUnauthenticated) {
+        authStore.logout();
+        _snack(context, e.message);
+        return;
+      }
+      setState(() => _profileError = e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _profileError = apiErrorMessage(e));
+    } finally {
+      if (mounted) setState(() => _loadingProfile = false);
+    }
+  }
+
+  /// Tarik-untuk-refresh: muat ulang profil dari server.
   Future<void> _refresh() async {
-    await Future<void>.delayed(const Duration(milliseconds: 800));
-    if (mounted) setState(() {});
+    if (!authStore.isLoggedIn) return;
+    await _loadProfile();
   }
 
   @override
@@ -27,129 +73,189 @@ class _ProfilePageState extends State<ProfilePage> {
     return RefreshIndicator(
       onRefresh: _refresh,
       color: AppColors.maroon700,
-      child: ListView(
-        padding: EdgeInsets.zero,
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          const _ProfileHeader(),
-          const SizedBox(height: 16),
-          const _DailyCheckIn(),
-          const SizedBox(height: 20),
-          _SectionTitle('Akun'),
-          _MenuCard(
-            children: [
-              _MenuTile(
-                icon: Icons.inbox_outlined,
-                label: 'Kotak Masuk',
-                onTap: () => _snack(context, 'Kotak Masuk'),
-              ),
-              _MenuTile(
-                icon: Icons.location_on_outlined,
-                label: 'Alamat Pengiriman',
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const AddressPage()),
-                ),
-              ),
-              _MenuTile(
-                icon: Icons.qr_code_scanner,
-                label: 'Scan Merchandise',
-                onTap: () => _snack(context, 'Scan Merchandise'),
-              ),
-              _MenuTile(
-                icon: Icons.fingerprint,
-                label: 'Aktifkan Biometric ID',
-                trailing: Switch(
-                  value: _biometric,
-                  onChanged: (v) => setState(() => _biometric = v),
-                ),
-              ),
-              _MenuTile(
-                icon: Icons.language,
-                label: 'Ubah Bahasa Aplikasi',
-                onTap: () => _snack(context, 'Ubah Bahasa'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          _SectionTitle('Pesan'),
-          _MenuCard(
-            children: [
-              _MenuTile(
-                icon: Icons.receipt_long_outlined,
-                label: 'Riwayat Pesanan',
-                onTap: () => _snack(context, 'Riwayat Pesanan'),
-              ),
-              _MenuTile(
-                icon: Icons.credit_card_outlined,
-                label: 'Metode Pembayaran',
-                onTap: () => _snack(context, 'Metode Pembayaran'),
-              ),
-              _MenuTile(
-                icon: Icons.shopping_bag_outlined,
-                label: 'Pesanan Jumlah Besar',
-                badge: 'Baru',
-                onTap: () => _snack(context, 'Pesanan Jumlah Besar'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          _SectionTitle('Roti Gembung Panglima'),
-          _MenuCard(
-            children: [
-              _MenuTile(
-                icon: Icons.help_outline,
-                label: 'Bantuan',
-                onTap: () => _snack(context, 'Bantuan'),
-              ),
-              _MenuTile(
-                icon: Icons.menu_book_outlined,
-                label: 'Kebijakan Privasi',
-                onTap: () => _snack(context, 'Kebijakan Privasi'),
-              ),
-              _MenuTile(
-                icon: Icons.info_outline,
-                label: 'Ketentuan Layanan',
-                onTap: () => _snack(context, 'Ketentuan Layanan'),
-              ),
-              _MenuTile(
-                icon: Icons.mail_outline,
-                label: 'Lapor Masalah',
-                onTap: () => _snack(context, 'Lapor Masalah'),
-              ),
-              _MenuTile(
-                icon: Icons.chat_outlined,
-                label: 'Layanan WhatsApp',
-                onTap: () => _snack(context, 'Layanan WhatsApp'),
-              ),
-              _MenuTile(
-                icon: Icons.favorite_border,
-                label: 'Tentang Aplikasi',
-                onTap: () => _snack(context, 'Tentang Aplikasi'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          Center(
-            child: TextButton.icon(
-              onPressed: () => _snack(context, 'Keluar (dummy)'),
-              icon: const Icon(Icons.logout, color: AppColors.error, size: 18),
-              label: const Text(
-                'Keluar',
-                style: TextStyle(color: AppColors.error),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          Center(
-            child: Text(
-              'Versi Aplikasi 1.0.0',
-              style: TextStyle(fontSize: 12, color: AppColors.grey400),
-            ),
-          ),
-          const SizedBox(height: 24),
-        ],
+      child: ValueListenableBuilder<UserAccount?>(
+        valueListenable: authStore.currentUser,
+        builder: (context, user, _) =>
+            user == null ? _loggedOut(context) : _loggedIn(context, user),
       ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // BELUM MASUK
+  // ---------------------------------------------------------------------------
+
+  Widget _loggedOut(BuildContext context) {
+    return ListView(
+      padding: EdgeInsets.zero,
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        const _LoggedOutHeader(),
+        const SizedBox(height: 20),
+        _MenuCard(
+          children: [
+            _MenuTile(
+              icon: Icons.help_outline,
+              label: 'Bantuan',
+              onTap: () => _snack(context, 'Bantuan'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.only(right: 16),
+          child: Text(
+            'V1.1.0',
+            textAlign: TextAlign.right,
+            style: TextStyle(fontSize: 12, color: AppColors.grey400),
+          ),
+        ),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // SUDAH MASUK
+  // ---------------------------------------------------------------------------
+
+  Widget _loggedIn(BuildContext context, UserAccount user) {
+    return ListView(
+      padding: EdgeInsets.zero,
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        // `user` sudah diselaraskan dengan `GET /me` oleh `applyProfile`;
+        // sebelum profil termuat (atau saat offline) nilainya jatuh balik ke
+        // data sesi dari `/auth`, jadi header tidak pernah kosong.
+        _ProfileHeader(
+          name: user.name,
+          email: user.email,
+          roles: _profile?.roles ?? '',
+          emailVerified: user.emailVerified,
+          error: _profileError,
+          loading: _loadingProfile,
+          onRetry: _loadProfile,
+        ),
+        const SizedBox(height: 16),
+        const _DailyCheckIn(),
+        const SizedBox(height: 20),
+        _SectionTitle('Akun'),
+        _MenuCard(
+          children: [
+            _MenuTile(
+              icon: Icons.inbox_outlined,
+              label: 'Kotak Masuk',
+              onTap: () => _snack(context, 'Kotak Masuk'),
+            ),
+            _MenuTile(
+              icon: Icons.location_on_outlined,
+              label: 'Alamat Pengiriman',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AddressPage()),
+              ),
+            ),
+            _MenuTile(
+              icon: Icons.qr_code_scanner,
+              label: 'Scan Merchandise',
+              onTap: () => _snack(context, 'Scan Merchandise'),
+            ),
+            _MenuTile(
+              icon: Icons.fingerprint,
+              label: 'Aktifkan Biometric ID',
+              trailing: Switch(
+                value: _biometric,
+                onChanged: (v) => setState(() => _biometric = v),
+              ),
+            ),
+            _MenuTile(
+              icon: Icons.language,
+              label: 'Ubah Bahasa Aplikasi',
+              onTap: () => _snack(context, 'Ubah Bahasa'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _SectionTitle('Pesan'),
+        _MenuCard(
+          children: [
+            _MenuTile(
+              icon: Icons.receipt_long_outlined,
+              label: 'Riwayat Pesanan',
+              onTap: () => _snack(context, 'Riwayat Pesanan'),
+            ),
+            _MenuTile(
+              icon: Icons.credit_card_outlined,
+              label: 'Metode Pembayaran',
+              onTap: () => _snack(context, 'Metode Pembayaran'),
+            ),
+            _MenuTile(
+              icon: Icons.shopping_bag_outlined,
+              label: 'Pesanan Jumlah Besar',
+              badge: 'Baru',
+              onTap: () => _snack(context, 'Pesanan Jumlah Besar'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _SectionTitle('Roti Gembung Panglima'),
+        _MenuCard(
+          children: [
+            _MenuTile(
+              icon: Icons.help_outline,
+              label: 'Bantuan',
+              onTap: () => _snack(context, 'Bantuan'),
+            ),
+            _MenuTile(
+              icon: Icons.menu_book_outlined,
+              label: 'Kebijakan Privasi',
+              onTap: () => _snack(context, 'Kebijakan Privasi'),
+            ),
+            _MenuTile(
+              icon: Icons.info_outline,
+              label: 'Ketentuan Layanan',
+              onTap: () => _snack(context, 'Ketentuan Layanan'),
+            ),
+            _MenuTile(
+              icon: Icons.mail_outline,
+              label: 'Lapor Masalah',
+              onTap: () => _snack(context, 'Lapor Masalah'),
+            ),
+            _MenuTile(
+              icon: Icons.chat_outlined,
+              label: 'Layanan WhatsApp',
+              onTap: () => _snack(context, 'Layanan WhatsApp'),
+            ),
+            _MenuTile(
+              icon: Icons.favorite_border,
+              label: 'Tentang Aplikasi',
+              onTap: () => _snack(context, 'Tentang Aplikasi'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        Center(
+          child: TextButton.icon(
+            onPressed: () {
+              authStore.logout();
+              _snack(context, 'Kamu telah keluar');
+            },
+            icon: const Icon(Icons.logout, color: AppColors.error, size: 18),
+            label: const Text(
+              'Keluar',
+              style: TextStyle(color: AppColors.error),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Center(
+          child: Text(
+            'Versi Aplikasi 1.0.0',
+            style: TextStyle(fontSize: 12, color: AppColors.grey400),
+          ),
+        ),
+        const SizedBox(height: 24),
+      ],
     );
   }
 }
@@ -159,13 +265,34 @@ class _ProfilePageState extends State<ProfilePage> {
 // =============================================================================
 
 class _ProfileHeader extends StatelessWidget {
-  const _ProfileHeader();
+  const _ProfileHeader({
+    required this.name,
+    required this.email,
+    required this.roles,
+    required this.emailVerified,
+    required this.loading,
+    required this.onRetry,
+    this.error,
+  });
+
+  final String name;
+  final String email;
+
+  /// Peran dari `GET /me` (mis. "Customer - End User"). Kosong bila `/me`
+  /// belum termuat.
+  final String roles;
+
+  final bool emailVerified;
+  final bool loading;
+  final VoidCallback onRetry;
+
+  /// Pesan galat pemuatan profil. Null bila tidak ada masalah.
+  final String? error;
 
   @override
   Widget build(BuildContext context) {
     final topPad = MediaQuery.of(context).padding.top;
     final scheme = Theme.of(context).colorScheme;
-    final profile = DummyData.profile;
 
     return Container(
       padding: EdgeInsets.fromLTRB(16, topPad + 12, 16, 20),
@@ -190,9 +317,14 @@ class _ProfileHeader extends StatelessWidget {
                 child: CircleAvatar(
                   radius: 26,
                   backgroundColor: AppColors.white,
+                  // Inisial nama dari server; '👤' bila nama belum termuat.
                   child: Text(
-                    profile.avatarEmoji,
-                    style: const TextStyle(fontSize: 26),
+                    name.isEmpty ? '👤' : name.characters.first.toUpperCase(),
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.maroon700,
+                    ),
                   ),
                 ),
               ),
@@ -207,7 +339,7 @@ class _ProfileHeader extends StatelessWidget {
                       style: TextStyle(fontSize: 13, color: AppColors.grey600),
                     ),
                     Text(
-                      profile.name,
+                      name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -215,29 +347,213 @@ class _ProfileHeader extends StatelessWidget {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                    if (email.isNotEmpty)
+                      Text(
+                        email,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.grey600,
+                        ),
+                      ),
+                    if (roles.isNotEmpty)
+                      Text(
+                        roles,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.grey400,
+                        ),
+                      ),
                   ],
                 ),
               ),
-              TextButton.icon(
-                onPressed: () => _snack(context, 'Edit Profil'),
-                icon: Icon(
-                  Icons.edit_outlined,
-                  size: 14,
-                  color: scheme.primary,
-                ),
-                label: Text(
-                  'Edit Profil',
-                  style: TextStyle(
-                    fontSize: 12,
+              // Saat profil sedang dimuat dari `/me`, indikatornya menggantikan
+              // tombol Edit agar lebar barisnya tidak berubah-ubah.
+              if (loading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.maroon700,
+                    ),
+                  ),
+                )
+              else
+                TextButton.icon(
+                  onPressed: () => _snack(context, 'Edit Profil'),
+                  icon: Icon(
+                    Icons.edit_outlined,
+                    size: 14,
                     color: scheme.primary,
-                    fontWeight: FontWeight.w600,
+                  ),
+                  label: Text(
+                    'Edit Profil',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
+          // Status verifikasi email dari klaim token (`/me`). Ini murni sinyal
+          // UI — server belum menegakkannya di endpoint mana pun.
+          if (!emailVerified && email.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            const _HeaderNotice(
+              icon: Icons.mark_email_unread_outlined,
+              color: AppColors.gold500,
+              message:
+                  'Email belum diverifikasi. Masuk ulang setelah verifikasi '
+                  'agar statusnya diperbarui.',
+            ),
+          ],
+          if (error != null) ...[
+            const SizedBox(height: 10),
+            _HeaderNotice(
+              icon: Icons.cloud_off_outlined,
+              color: AppColors.error,
+              message: error!,
+              action: loading ? null : onRetry,
+              actionLabel: 'Coba lagi',
+            ),
+          ],
           const SizedBox(height: 14),
           const _StatsCard(),
+        ],
+      ),
+    );
+  }
+}
+
+/// Baris pemberitahuan kecil di dalam header (galat muat profil / status
+/// verifikasi), dengan tombol aksi opsional.
+class _HeaderNotice extends StatelessWidget {
+  const _HeaderNotice({
+    required this.icon,
+    required this.color,
+    required this.message,
+    this.action,
+    this.actionLabel,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String message;
+  final VoidCallback? action;
+  final String? actionLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(fontSize: 12, color: AppColors.grey600),
+            ),
+          ),
+          if (action != null) ...[
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: action,
+              child: Text(
+                actionLabel ?? 'Coba lagi',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Header halaman Akun saat BELUM masuk — kartu ajakan masuk/daftar.
+class _LoggedOutHeader extends StatelessWidget {
+  const _LoggedOutHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final topPad = MediaQuery.of(context).padding.top;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(16, topPad + 16, 16, 24),
+      decoration: const BoxDecoration(
+        color: AppColors.maroon700,
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Akun',
+            style: TextStyle(
+              color: AppColors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Masuk atau daftar ke Roti Gembung Panglima',
+                  style: TextStyle(fontSize: 16, color: AppColors.textDark),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: FilledButton(
+                    onPressed: () => showLoginWelcome(context),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.maroon700,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: const Text(
+                      'Masuk / Daftar',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

@@ -37,6 +37,8 @@ dependencies:
 
   # HTTP client — konfigurasi mengikuti pola project svp_app.
   dio: ^5.9.2
+  # Base URL & API key dibaca dari file `.env` (pola sama dengan svp_app).
+  flutter_dotenv: ^6.0.1
   # Format angka/tanggal (rupiah, tanggal pesanan).
   intl: ^0.20.2
   # Peta OpenStreetMap + tipe koordinat (pilih lokasi delivery).
@@ -67,6 +69,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # `.env` dimuat lewat rootBundle, jadi wajib terdaftar sebagai aset.
+  assets:
+    - .env
 
   # To add assets to your application, add an assets section, like this:
   # assets:

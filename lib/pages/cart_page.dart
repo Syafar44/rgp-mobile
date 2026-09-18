@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 
 import '../core/config/fees.dart';
+import '../core/network/api_error.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/formatter.dart';
 import '../data/address_store.dart';
 import '../data/cart_store.dart';
-import '../data/dummy/dummy_data.dart';
-import '../data/models/cart_item.dart';
+import '../data/models/cart.dart';
 import '../data/models/saved_address.dart';
 import '../data/notifiers.dart';
+import '../data/outlet_store.dart';
 import '../widgets/app_top_bar.dart';
 import '../widgets/product_card.dart';
 import 'address_page.dart';
@@ -17,8 +18,8 @@ import 'outlet_page.dart';
 
 /// Halaman Konfirmasi Pesanan (keranjang).
 ///
-/// Metode hanya Pickup atau Delivery (tanpa Dine-In). Isi keranjang dibaca
-/// dari [cartStore] yang tersimpan di lokal HP.
+/// Metode hanya Pickup atau Delivery (tanpa Dine-In). Isi keranjang diambil
+/// dari server (`/pos/app/v1/outlets/:id/cart`) via [cartStore], per-outlet.
 class CartPage extends StatefulWidget {
   const CartPage({super.key});
 
@@ -29,17 +30,57 @@ class CartPage extends StatefulWidget {
 class _CartPageState extends State<CartPage> {
   /// 0 = Pickup, 1 = Delivery.
   int _method = 0;
-  int _outletIndex = 0;
 
-  /// Ganti outlet sumber. Tetap pada metode yang sedang aktif.
+  @override
+  void initState() {
+    super.initState();
+    outletStore.selected.addListener(_onOutletChanged);
+    // Muat keranjang server untuk outlet terpilih saat halaman dibuka.
+    final id = outletStore.outletId;
+    if (id != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => cartStore.loadFor(id));
+    }
+  }
+
+  @override
+  void dispose() {
+    outletStore.selected.removeListener(_onOutletChanged);
+    super.dispose();
+  }
+
+  void _onOutletChanged() {
+    final id = outletStore.outletId;
+    if (id != null) cartStore.loadFor(id);
+  }
+
+  /// Ubah jumlah satu baris keranjang di server; tampilkan pesan bila gagal.
+  Future<void> _changeQty(ServerCartItem item, int newQty) async {
+    final id = outletStore.outletId;
+    if (id == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await cartStore.setQty(id, item.id, newQty);
+    } on ApiException catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(e.message), duration: const Duration(seconds: 2)),
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Gagal memperbarui keranjang. Coba lagi.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// Pilih / ganti outlet sumber (disimpan di [outletStore], lintas halaman).
   Future<void> _pickOutlet() async {
     final selected = await Navigator.push<Outlet>(
       context,
       MaterialPageRoute(builder: (_) => const OutletPage()),
     );
-    if (selected == null || !mounted) return;
-    final idx = DummyData.outlets.indexWhere((o) => o.name == selected.name);
-    if (idx >= 0) setState(() => _outletIndex = idx);
+    if (selected != null) outletStore.select(selected);
   }
 
   /// Pilih / ubah lokasi pengiriman (buka halaman Alamat Pengiriman).
@@ -62,7 +103,17 @@ class _CartPageState extends State<CartPage> {
 
   /// Konfirmasi metode (Pickup/Delivery) lalu lanjut ke halaman Checkout.
   Future<void> _goToCheckout() async {
-    final outlet = DummyData.outlets[_outletIndex];
+    final outlet = outletStore.outlet;
+    if (outlet == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pilih outlet Panglima dulu.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      _pickOutlet();
+      return;
+    }
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -84,58 +135,73 @@ class _CartPageState extends State<CartPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: const AppTopBar(title: 'Konfirmasi Pesanan'),
-      body: ValueListenableBuilder<List<CartItem>>(
-        valueListenable: cartStore.notifier,
-        builder: (context, items, _) {
-          if (items.isEmpty) return _EmptyCart(onBrowse: _addMoreItems);
-          return Column(
-            children: [
-              _MethodTabs(
-                active: _method,
-                onChanged: (i) => setState(() => _method = i),
-              ),
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                  children: [
-                    // Kartu outlet sumber (sama untuk Pickup & Delivery).
-                    _PickupCard(
-                      outlet: DummyData.outlets[_outletIndex],
-                      onChange: _pickOutlet,
-                    ),
-                    if (_method == 1) ...[
-                      const SizedBox(height: 12),
-                      // Lokasi pengiriman kita.
-                      _DeliveryCard(onChange: _pickAddress),
-                      const SizedBox(height: 12),
-                      // Muncul setelah alamat terpilih: upsell + Instant Delivery.
-                      _OngkirUpsellBanner(subtotal: cartStore.total),
-                      const SizedBox(height: 12),
-                      const _InstantDeliveryRow(),
-                    ],
-                    const SizedBox(height: 20),
-                    _PesanHeader(onAdd: _addMoreItems),
-                    const SizedBox(height: 12),
-                    for (final item in items) ...[
-                      _OrderItemCard(item: item),
-                      const SizedBox(height: 12),
-                    ],
-                    const SizedBox(height: 4),
-                    const _VoucherSection(),
-                  ],
-                ),
-              ),
-            ],
+      body: ValueListenableBuilder<ServerCart>(
+        valueListenable: cartStore.cart,
+        builder: (context, cart, _) {
+          return ValueListenableBuilder<bool>(
+            valueListenable: cartStore.loading,
+            builder: (context, loading, _) {
+              if (cart.isEmpty) {
+                if (loading) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                return _EmptyCart(onBrowse: _addMoreItems);
+              }
+              return _cartBody(cart);
+            },
           );
         },
       ),
-      bottomNavigationBar: ValueListenableBuilder<List<CartItem>>(
-        valueListenable: cartStore.notifier,
-        builder: (context, items, _) {
-          if (items.isEmpty) return const SizedBox.shrink();
+      bottomNavigationBar: ValueListenableBuilder<ServerCart>(
+        valueListenable: cartStore.cart,
+        builder: (context, cart, _) {
+          if (cart.isEmpty) return const SizedBox.shrink();
           return _CheckoutBar(total: _payableTotal, onPay: _goToCheckout);
         },
       ),
+    );
+  }
+
+  Widget _cartBody(ServerCart cart) {
+    return Column(
+      children: [
+        _MethodTabs(
+          active: _method,
+          onChanged: (i) => setState(() => _method = i),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            children: [
+              // Kartu outlet sumber (sama untuk Pickup & Delivery).
+              ValueListenableBuilder<Outlet?>(
+                valueListenable: outletStore.selected,
+                builder: (context, outlet, _) =>
+                    _PickupCard(outlet: outlet, onChange: _pickOutlet),
+              ),
+              if (_method == 1) ...[
+                const SizedBox(height: 12),
+                // Lokasi pengiriman kita.
+                _DeliveryCard(onChange: _pickAddress),
+                const SizedBox(height: 12),
+                // Muncul setelah alamat terpilih: upsell + Instant Delivery.
+                _OngkirUpsellBanner(subtotal: cart.total),
+                const SizedBox(height: 12),
+                const _InstantDeliveryRow(),
+              ],
+              const SizedBox(height: 20),
+              _PesanHeader(onAdd: _addMoreItems),
+              const SizedBox(height: 12),
+              for (final item in cart.items) ...[
+                _OrderItemCard(item: item, onQty: _changeQty),
+                const SizedBox(height: 12),
+              ],
+              const SizedBox(height: 4),
+              const _VoucherSection(),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -221,15 +287,16 @@ class _MethodTabs extends StatelessWidget {
 class _PickupCard extends StatelessWidget {
   const _PickupCard({required this.outlet, required this.onChange});
 
-  final Outlet outlet;
+  final Outlet? outlet;
   final VoidCallback onChange;
 
   @override
   Widget build(BuildContext context) {
+    final o = outlet;
     return _LocationShell(
       icon: Icons.storefront,
-      title: 'Outlet: ${outlet.name}',
-      subtitle: outlet.address,
+      title: o == null ? 'Pilih Outlet Panglima' : 'Outlet: ${o.name}',
+      subtitle: o == null ? 'Ketuk "Ubah" untuk pilih outlet terdekat' : o.address,
       onChange: onChange,
     );
   }
@@ -374,44 +441,15 @@ class _PesanHeader extends StatelessWidget {
 }
 
 class _OrderItemCard extends StatelessWidget {
-  const _OrderItemCard({required this.item});
+  const _OrderItemCard({required this.item, required this.onQty});
 
-  final CartItem item;
+  final ServerCartItem item;
 
-  Future<void> _editNote(BuildContext context) async {
-    final controller = TextEditingController(text: item.note);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Catatan untuk item'),
-        content: TextField(
-          controller: controller,
-          maxLength: 100,
-          maxLines: 3,
-          minLines: 1,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Contoh: jangan pakai sea salt',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Batal'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Simpan'),
-          ),
-        ],
-      ),
-    );
-    if (result != null) cartStore.setNote(item.product.id, result);
-  }
+  /// Dipanggil saat jumlah diubah: (item, jumlah baru). ≤ 0 → baris dihapus.
+  final Future<void> Function(ServerCartItem item, int newQty) onQty;
 
   @override
   Widget build(BuildContext context) {
-    final p = item.product;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -427,7 +465,7 @@ class _OrderItemCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  p.name,
+                  item.title,
                   style: const TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.bold,
@@ -443,34 +481,15 @@ class _OrderItemCard extends StatelessWidget {
                     color: AppColors.maroon700,
                   ),
                 ),
-                if (item.note.isNotEmpty) ...[
+                if (item.props.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
-                    'Catatan: ${item.note}',
+                    item.props.map((e) => '${e.quantity}× ${e.title}').join(', '),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 12, color: AppColors.grey600),
                   ),
                 ],
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: () => _editNote(context),
-                  icon: const Icon(Icons.edit_outlined, size: 15),
-                  label: const Text('Ganti', style: TextStyle(fontSize: 13)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.grey600,
-                    side: const BorderSide(color: AppColors.grey300),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 0,
-                    ),
-                    minimumSize: const Size(0, 30),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
@@ -482,11 +501,11 @@ class _OrderItemCard extends StatelessWidget {
                 child: SizedBox(
                   width: 56,
                   height: 56,
-                  child: ProductImage(imageUrl: p.imageUrl),
+                  child: ProductImage(imageUrl: item.imageUrl),
                 ),
               ),
               const SizedBox(height: 10),
-              _CartStepper(item: item),
+              _CartStepper(item: item, onQty: onQty),
             ],
           ),
         ],
@@ -495,11 +514,12 @@ class _OrderItemCard extends StatelessWidget {
   }
 }
 
-/// Stepper jumlah pada item keranjang (mengubah [cartStore] langsung).
+/// Stepper jumlah pada item keranjang. Perubahan dikirim ke server via [onQty].
 class _CartStepper extends StatelessWidget {
-  const _CartStepper({required this.item});
+  const _CartStepper({required this.item, required this.onQty});
 
-  final CartItem item;
+  final ServerCartItem item;
+  final Future<void> Function(ServerCartItem item, int newQty) onQty;
 
   @override
   Widget build(BuildContext context) {
@@ -507,13 +527,13 @@ class _CartStepper extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         _RoundStep(
-          icon: Icons.remove,
-          onTap: () => cartStore.setQty(item.product.id, item.qty - 1),
+          icon: item.quantity <= 1 ? Icons.delete_outline : Icons.remove,
+          onTap: () => onQty(item, item.quantity - 1),
         ),
         SizedBox(
           width: 26,
           child: Text(
-            '${item.qty}',
+            '${item.quantity}',
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontSize: 15,
@@ -524,7 +544,7 @@ class _CartStepper extends StatelessWidget {
         ),
         _RoundStep(
           icon: Icons.add,
-          onTap: () => cartStore.setQty(item.product.id, item.qty + 1),
+          onTap: () => onQty(item, item.quantity + 1),
         ),
       ],
     );

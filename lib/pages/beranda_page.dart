@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../core/theme/app_colors.dart';
 import '../data/dummy/dummy_data.dart';
+import '../data/menu_repository.dart';
 import '../data/models/product.dart';
 import '../data/models/promo_banner.dart';
 import '../data/notifiers.dart';
-import '../widgets/dashed_border.dart';
+import '../data/outlet_store.dart';
 import '../widgets/product_card.dart';
 import 'outlet_page.dart';
 
@@ -18,69 +19,106 @@ class BerandaPage extends StatefulWidget {
 }
 
 class _BerandaPageState extends State<BerandaPage> {
-  int _outletIndex = 0;
+  /// Preview menu "Roti Gembung" di Beranda. Belum ada endpoint rekomendasi,
+  /// jadi pakai endpoint menu outlet lalu saring hanya Roti Gembung, ambil 6
+  /// produk terbawah.
+  List<Product> _rotiGembung = const [];
+  int? _menuOutletId;
+
+  @override
+  void initState() {
+    super.initState();
+    outletStore.selected.addListener(_onOutletChanged);
+    _loadMenu();
+  }
+
+  @override
+  void dispose() {
+    outletStore.selected.removeListener(_onOutletChanged);
+    super.dispose();
+  }
+
+  void _onOutletChanged() {
+    if (outletStore.outletId != _menuOutletId) _loadMenu();
+  }
+
+  Future<void> _loadMenu() async {
+    final id = outletStore.outletId;
+    _menuOutletId = id;
+    if (id == null) {
+      if (mounted) setState(() => _rotiGembung = const []);
+      return;
+    }
+    try {
+      final products = await menuRepository.outletMenus(id);
+      if (!mounted) return;
+      final roti = products
+          .where(
+            (p) => p.category.trim().toLowerCase().contains('roti gembung'),
+          )
+          .toList();
+      // Ambil 6 produk terbawah (paling akhir pada daftar).
+      final preview = roti.length > 6 ? roti.sublist(roti.length - 6) : roti;
+      setState(() => _rotiGembung = preview);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _rotiGembung = const []); // sembunyikan bila gagal
+    }
+  }
 
   Future<void> _pickOutlet() async {
     final selected = await Navigator.push<Outlet>(
       context,
       MaterialPageRoute(builder: (_) => const OutletPage()),
     );
-    if (selected == null) return;
-    final idx = DummyData.outlets.indexWhere((o) => o.name == selected.name);
-    if (idx >= 0) setState(() => _outletIndex = idx);
+    if (selected != null) outletStore.select(selected);
   }
 
-  /// Tarik-untuk-refresh: muat ulang data (dummy → jeda singkat lalu rebuild).
-  Future<void> _refresh() async {
-    await Future<void>.delayed(const Duration(milliseconds: 800));
-    if (mounted) setState(() {});
-  }
+  /// Tarik-untuk-refresh: muat ulang preview menu.
+  Future<void> _refresh() => _loadMenu();
 
   @override
   Widget build(BuildContext context) {
     final topPadding = MediaQuery.of(context).padding.top;
-    final outlet = DummyData.outlets[_outletIndex];
 
-    return RefreshIndicator(
-      onRefresh: _refresh,
-      edgeOffset: topPadding,
-      color: AppColors.maroon700,
-      child: CustomScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        slivers: [
-          SliverPersistentHeader(
-            pinned: true,
-            delegate: _HeaderDelegate(
-              topPadding: topPadding,
-              outlet: outlet,
-              onTapLocation: _pickOutlet,
+    return ValueListenableBuilder<Outlet?>(
+      valueListenable: outletStore.selected,
+      builder: (context, outlet, _) => RefreshIndicator(
+        onRefresh: _refresh,
+        edgeOffset: topPadding,
+        color: AppColors.maroon700,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _HeaderDelegate(
+                topPadding: topPadding,
+                outlet: outlet,
+                onTapLocation: _pickOutlet,
+              ),
             ),
-          ),
-          SliverToBoxAdapter(
-            child: Column(
-              children: [
-                const SizedBox(height: 8),
-                const _PromoCarousel(),
-                const SizedBox(height: 20),
-                const _QuickActions(),
-                const SizedBox(height: 20),
-                _OrderLagi(),
-                const SizedBox(height: 20),
-                const _VoucherBanner(),
-                const SizedBox(height: 8),
-                _ProductSection(
-                  title: 'Spesial Hari Ini',
-                  products: DummyData.spesialHariIni,
-                ),
-                _ProductSection(title: 'Baru!', products: DummyData.produkBaru),
-                _MakananGrid(products: DummyData.makanan),
-                const SizedBox(height: 20),
-                const _ContactCard(),
-                const SizedBox(height: 24),
-              ],
+            SliverToBoxAdapter(
+              child: Column(
+                children: [
+                  const SizedBox(height: 8),
+                  const _PromoCarousel(),
+                  const SizedBox(height: 20),
+                  const _QuickActions(),
+                  const SizedBox(height: 20),
+                  _MenuGrid(
+                    title: 'Roti Gembung',
+                    products: _rotiGembung,
+                    onSeeAll: () => selectedPageNotifier.value = 1,
+                  ),
+                  const SizedBox(height: 10),
+                  const _ContactCard(),
+                  const SizedBox(height: 24),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -102,7 +140,7 @@ class _HeaderDelegate extends SliverPersistentHeaderDelegate {
   });
 
   final double topPadding;
-  final ({String name, String address}) outlet;
+  final Outlet? outlet;
   final VoidCallback onTapLocation;
 
   static const double _collapsedExtra = 92;
@@ -249,7 +287,7 @@ class _LocationCard extends StatelessWidget {
     this.expandedVisibility = 1,
   });
 
-  final ({String name, String address}) outlet;
+  final Outlet? outlet;
   final VoidCallback onTap;
 
   /// Progres header: 1 = belum discroll (alamat tampil, Delivery/Pickup di
@@ -287,7 +325,7 @@ class _LocationCard extends StatelessWidget {
                     children: [
                       Flexible(
                         child: Text(
-                          outlet.name,
+                          outlet?.name ?? 'Pilih Outlet Panglima',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.bold),
@@ -300,7 +338,7 @@ class _LocationCard extends StatelessWidget {
                     visibility: expandedVisibility,
                     padding: const EdgeInsets.only(top: 2),
                     child: Text(
-                      outlet.address,
+                      outlet?.address ?? 'Ketuk untuk pilih outlet terdekat',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -719,162 +757,15 @@ class _ActionCard extends StatelessWidget {
 }
 
 // =============================================================================
-// ORDER LAGI
+// GRID MENU (2 kolom) — preview di Beranda
 // =============================================================================
 
-class _OrderLagi extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final items = DummyData.orderLagi;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _SectionHeader(title: 'Order Lagi'),
-        SizedBox(
-          height: 84,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: items.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
-            itemBuilder: (context, i) => _OrderLagiCard(item: items[i]),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _OrderLagiCard extends StatelessWidget {
-  const _OrderLagiCard({required this.item});
-
-  final ({Product product, String outletLabel}) item;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final product = item.product;
-    return Container(
-      width: 240,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: AppColors.creamSurface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.grey100),
-      ),
-      child: Row(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: SizedBox(
-              width: 48,
-              height: 48,
-              child: ProductImage(imageUrl: product.imageUrl),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  item.outletLabel,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.maroon700,
-                  ),
-                ),
-                Text(
-                  '1x ${product.name}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textDark,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton(
-            onPressed: () => _snack(context, product.name),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size(56, 32),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              side: BorderSide(color: scheme.primary),
-            ),
-            child: const Text('Beli', style: TextStyle(fontSize: 13)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// =============================================================================
-// VOUCHER BANNER
-// =============================================================================
-
-class _VoucherBanner extends StatelessWidget {
-  const _VoucherBanner();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: DashedRoundedBorder(
-        color: AppColors.maroon700,
-        radius: 16,
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: AppColors.yellow100,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
-            children: [
-              const Text('💌', style: TextStyle(fontSize: 26)),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'Voucher Beli 1 Gratis 1 SEPUASNYA!',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.maroon900,
-                  ),
-                ),
-              ),
-              FilledButton(
-                onPressed: () => _snack(context, 'Voucher diklaim'),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size(64, 36),
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                ),
-                child: const Text('Klaim'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// =============================================================================
-// SECTION PRODUK (horizontal)
-// =============================================================================
-
-class _ProductSection extends StatelessWidget {
-  const _ProductSection({required this.title, required this.products});
+class _MenuGrid extends StatelessWidget {
+  const _MenuGrid({required this.title, required this.products, this.onSeeAll});
 
   final String title;
   final List<Product> products;
+  final VoidCallback? onSeeAll;
 
   @override
   Widget build(BuildContext context) {
@@ -882,40 +773,7 @@ class _ProductSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(title: title, onSeeAll: () {}),
-        SizedBox(
-          height: ProductCard.cellExtent,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: products.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
-            itemBuilder: (context, i) =>
-                ProductCard(product: products[i], width: 150),
-          ),
-        ),
-        const SizedBox(height: 4),
-      ],
-    );
-  }
-}
-
-// =============================================================================
-// GRID MAKANAN (2 kolom)
-// =============================================================================
-
-class _MakananGrid extends StatelessWidget {
-  const _MakananGrid({required this.products});
-
-  final List<Product> products;
-
-  @override
-  Widget build(BuildContext context) {
-    if (products.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionHeader(title: 'Makanan', onSeeAll: () {}),
+        _SectionHeader(title: title, onSeeAll: onSeeAll),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: GridView.builder(
@@ -1028,10 +886,4 @@ class _SectionHeader extends StatelessWidget {
       ),
     );
   }
-}
-
-void _snack(BuildContext context, String msg) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(msg), duration: const Duration(seconds: 1)),
-  );
 }

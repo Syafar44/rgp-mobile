@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../core/network/api_error.dart';
 import '../core/theme/app_colors.dart';
-import '../data/dummy/dummy_data.dart';
+import '../data/menu_repository.dart';
 import '../data/models/product.dart';
+import '../data/outlet_store.dart';
 import '../widgets/product_card.dart';
 import 'outlet_page.dart';
 
@@ -24,18 +26,16 @@ class _MenuPageState extends State<MenuPage> {
   final ScrollController _tabScroll = ScrollController();
   final GlobalKey _listKey = GlobalKey();
 
-  late final List<MenuSection> _sections = DummyData.menuSections;
-  late final List<GlobalKey> _sectionKeys = List.generate(
-    _sections.length,
-    (_) => GlobalKey(),
-  );
-  late final List<GlobalKey> _tabKeys = List.generate(
-    _sections.length,
-    (_) => GlobalKey(),
-  );
+  List<MenuSection> _sections = const [];
+  List<GlobalKey> _sectionKeys = const [];
+  List<GlobalKey> _tabKeys = const [];
 
-  int _outletIndex = 0;
   int _activeTab = 0;
+  bool _loading = false;
+  String? _error;
+
+  /// id outlet yang menunya sedang dimuat — cegah fetch ganda saat outlet sama.
+  int? _loadedOutletId;
 
   /// True saat scroll dipicu penekanan tab (agar scroll-spy tidak bentrok).
   bool _programmaticScroll = false;
@@ -44,14 +44,99 @@ class _MenuPageState extends State<MenuPage> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    outletStore.selected.addListener(_onOutletChanged);
+    _load();
   }
 
   @override
   void dispose() {
+    outletStore.selected.removeListener(_onOutletChanged);
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
     _tabScroll.dispose();
     super.dispose();
+  }
+
+  void _onOutletChanged() {
+    if (outletStore.outletId != _loadedOutletId) _load();
+  }
+
+  /// Ambil menu untuk outlet yang sedang dipilih (`/outlets/:id/menus`).
+  Future<void> _load() async {
+    final id = outletStore.outletId;
+    if (id == null) {
+      setState(() {
+        _sections = const [];
+        _sectionKeys = const [];
+        _tabKeys = const [];
+        _loading = false;
+        _error = null;
+        _loadedOutletId = null;
+      });
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final products = await menuRepository.outletMenus(id);
+      if (!mounted) return;
+      final sections = _group(products);
+      setState(() {
+        _sections = sections;
+        _sectionKeys = List.generate(sections.length, (_) => GlobalKey());
+        _tabKeys = List.generate(sections.length, (_) => GlobalKey());
+        _activeTab = 0;
+        _loading = false;
+        _loadedOutletId = id;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = apiErrorMessage(e);
+        _loading = false;
+        _loadedOutletId = id;
+      });
+    }
+  }
+
+  /// Hanya kategori ini yang ditampilkan (urutannya juga urutan tampil).
+  static const List<String> _allowedCategories = [
+    'Roti Gembung',
+    'Bakpia',
+    'Donat',
+    'Pizza',
+  ];
+
+  /// Tentukan kategori sebuah produk di antara [_allowedCategories].
+  ///
+  /// Respons dikelompokkan per kategori (`{category, data: [...]}`), jadi
+  /// [Product.category] berisi nama kategori dari server. Dicocokkan dengan
+  /// `contains` agar tahan variasi ejaan (mis. "Roti Gembung Panglima" →
+  /// Roti Gembung). Null bila di luar daftar.
+  String? _matchCategory(Product p) {
+    final cat = p.category.trim().toLowerCase();
+    for (final c in _allowedCategories) {
+      if (cat.contains(c.toLowerCase())) return c;
+    }
+    if (cat.contains('donut')) return 'Donat'; // variasi ejaan umum
+    return null;
+  }
+
+  /// Kelompokkan produk per kategori — hanya [_allowedCategories], urut sesuai
+  /// daftar itu; kategori lain dibuang.
+  List<MenuSection> _group(List<Product> products) {
+    final byCat = <String, List<Product>>{};
+    for (final p in products) {
+      final cat = _matchCategory(p);
+      if (cat == null) continue; // di luar daftar → tidak ditampilkan
+      (byCat[cat] ??= <Product>[]).add(p);
+    }
+    return [
+      for (final c in _allowedCategories)
+        if (byCat[c]?.isNotEmpty ?? false) (title: c, items: byCat[c]!),
+    ];
   }
 
   /// Sinkronkan tab aktif dengan posisi scroll.
@@ -94,11 +179,8 @@ class _MenuPageState extends State<MenuPage> {
     _programmaticScroll = false;
   }
 
-  /// Tarik-untuk-refresh: muat ulang data (dummy → jeda singkat lalu rebuild).
-  Future<void> _refresh() async {
-    await Future<void>.delayed(const Duration(milliseconds: 800));
-    if (mounted) setState(() {});
-  }
+  /// Tarik-untuk-refresh: muat ulang menu dari API.
+  Future<void> _refresh() => _load();
 
   /// Geser tab bar horizontal agar tab aktif terlihat.
   void _ensureTabVisible(int i) {
@@ -119,41 +201,76 @@ class _MenuPageState extends State<MenuPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _OutletSelector(
-            outlet: DummyData.outlets[_outletIndex],
-            onTap: _pickOutlet,
+          ValueListenableBuilder<Outlet?>(
+            valueListenable: outletStore.selected,
+            builder: (context, outlet, _) =>
+                _OutletSelector(outlet: outlet, onTap: _pickOutlet),
           ),
-          _CategoryTabs(
-            sections: _sections,
-            tabKeys: _tabKeys,
-            activeIndex: _activeTab,
-            controller: _tabScroll,
-            onTap: _onTabTap,
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _refresh,
-              color: AppColors.maroon700,
-              child: ListView(
-                key: _listKey,
-                controller: _scroll,
-                physics: const AlwaysScrollableScrollPhysics(),
-                // Bangun semua section agar tab bisa langsung loncat & sinkron.
-                cacheExtent: 3000,
-                padding: const EdgeInsets.only(bottom: 24),
-                children: [
-                  for (int i = 0; i < _sections.length; i++)
-                    _CategorySection(
-                      key: _sectionKeys[i],
-                      section: _sections[i],
-                    ),
-                ],
-              ),
-            ),
-          ),
+          Expanded(child: _body()),
         ],
       ),
+    );
+  }
+
+  Widget _body() {
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppColors.maroon700),
+      );
+    }
+    if (_error != null) {
+      return _MenuStatus(
+        icon: Icons.error_outline,
+        message: _error!,
+        onRetry: _load,
+      );
+    }
+    if (outletStore.outletId == null) {
+      return const _MenuStatus(
+        icon: Icons.storefront_outlined,
+        message: 'Pilih outlet Panglima dulu untuk melihat menu.',
+      );
+    }
+    if (_sections.isEmpty) {
+      return _MenuStatus(
+        icon: Icons.restaurant_menu,
+        message: 'Menu belum tersedia untuk outlet ini.',
+        onRetry: _load,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _CategoryTabs(
+          sections: _sections,
+          tabKeys: _tabKeys,
+          activeIndex: _activeTab,
+          controller: _tabScroll,
+          onTap: _onTabTap,
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _refresh,
+            color: AppColors.maroon700,
+            child: ListView(
+              key: _listKey,
+              controller: _scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              // Bangun semua section agar tab bisa langsung loncat & sinkron.
+              cacheExtent: 3000,
+              padding: const EdgeInsets.only(bottom: 24),
+              children: [
+                for (int i = 0; i < _sections.length; i++)
+                  _CategorySection(
+                    key: _sectionKeys[i],
+                    section: _sections[i],
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -162,9 +279,7 @@ class _MenuPageState extends State<MenuPage> {
       context,
       MaterialPageRoute(builder: (_) => const OutletPage()),
     );
-    if (selected == null) return;
-    final idx = DummyData.outlets.indexWhere((o) => o.name == selected.name);
-    if (idx >= 0) setState(() => _outletIndex = idx);
+    if (selected != null) outletStore.select(selected);
   }
 }
 
@@ -175,7 +290,7 @@ class _MenuPageState extends State<MenuPage> {
 class _OutletSelector extends StatelessWidget {
   const _OutletSelector({required this.outlet, required this.onTap});
 
-  final ({String name, String address}) outlet;
+  final Outlet? outlet;
   final VoidCallback onTap;
 
   @override
@@ -207,14 +322,14 @@ class _OutletSelector extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      outlet.name,
+                      outlet?.name ?? 'Pilih Outlet Panglima',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      outlet.address,
+                      outlet?.address ?? 'Ketuk untuk pilih outlet terdekat',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -359,6 +474,50 @@ class _CategorySection extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// =============================================================================
+// STATUS (memuat gagal / kosong)
+// =============================================================================
+
+class _MenuStatus extends StatelessWidget {
+  const _MenuStatus({required this.icon, required this.message, this.onRetry});
+
+  final IconData icon;
+  final String message;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 56, color: AppColors.grey300),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.grey600),
+            ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Coba Lagi'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.maroon700,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

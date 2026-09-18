@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/formatter.dart';
 import '../data/cart_store.dart';
-import '../data/models/cart_item.dart';
+import '../data/models/cart.dart';
 import '../pages/cart_page.dart';
 
 /// Bilah keranjang mengambang yang selalu tampil tepat di atas bottom navbar
@@ -13,10 +13,10 @@ class CartBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<List<CartItem>>(
-      valueListenable: cartStore.notifier,
-      builder: (context, items, _) {
-        if (items.isEmpty) return const SizedBox.shrink();
+    return ValueListenableBuilder<ServerCart>(
+      valueListenable: cartStore.cart,
+      builder: (context, cart, _) {
+        if (cart.isEmpty) return const SizedBox.shrink();
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
           child: Material(

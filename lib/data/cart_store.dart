@@ -1,111 +1,126 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-import 'models/cart_item.dart';
-import 'models/product.dart';
+import '../core/network/api_error.dart';
+import 'cart_repository.dart';
+import 'models/cart.dart';
+import 'outlet_store.dart';
 
-/// Penyimpanan keranjang belanja.
+/// Keranjang **sisi server**, satu untuk seluruh aplikasi (dipakai bilah
+/// keranjang, halaman Konfirmasi Pesanan, dan Checkout).
 ///
-/// Sumber kebenaran untuk UI adalah [notifier] (in-memory) agar layar ikut
-/// ter-update seketika. Isinya juga dipertahankan ke penyimpanan lokal HP
-/// ([SharedPreferences]) sehingga keranjang tidak hilang saat aplikasi ditutup.
-/// Operasi penyimpanan bersifat best-effort; kegagalan (mis. plugin belum
-/// tersedia saat test) diabaikan agar tidak mengganggu alur.
+/// Sumber kebenaran ada di server: setiap operasi memanggil API dan mengganti
+/// [cart] dengan keranjang terbaru dari respons. Keranjang bersifat per-outlet
+/// (satu pembeli hanya boleh punya satu keranjang aktif); saat outlet berganti,
+/// panggil [loadFor] untuk memuat keranjang outlet tersebut.
+///
+/// Operasi tulis melempar [ApiException] agar UI bisa menampilkan pesan
+/// (mis. `stok_tidak_tersedia`); isi keranjang tidak diubah bila operasi gagal.
 class CartStore {
-  CartStore();
+  CartStore(this._repo);
 
-  final ValueNotifier<List<CartItem>> notifier =
-      ValueNotifier<List<CartItem>>([]);
+  final CartRepository _repo;
 
-  static const String _key = 'cart_v1';
+  final ValueNotifier<ServerCart> cart =
+      ValueNotifier<ServerCart>(ServerCart.empty());
 
-  List<CartItem> get items => notifier.value;
+  /// True selama memuat/mengubah keranjang (untuk indikator di UI).
+  final ValueNotifier<bool> loading = ValueNotifier<bool>(false);
 
-  /// Total jumlah unit di keranjang.
-  int get count => items.fold(0, (sum, e) => sum + e.qty);
+  /// Pesan galat pemuatan terakhir (untuk state error di halaman keranjang).
+  /// Null bila tidak ada galat.
+  final ValueNotifier<String?> error = ValueNotifier<String?>(null);
 
-  /// Total harga seluruh baris.
-  int get total => items.fold(0, (sum, e) => sum + e.subtotal);
+  /// Outlet yang keranjangnya sedang dimuat. Null bila belum pernah dimuat.
+  int? _outletId;
 
-  bool get isEmpty => items.isEmpty;
+  List<ServerCartItem> get items => cart.value.items;
+  int get count => cart.value.count;
+  int get total => cart.value.total;
+  bool get isEmpty => cart.value.isEmpty;
 
-  /// Muat keranjang dari penyimpanan lokal. Panggil sekali saat aplikasi start.
-  Future<void> load() async {
+  /// Muat keranjang untuk [outletId] dari server (GET). Aman dipanggil ulang.
+  Future<void> loadFor(int outletId) async {
+    _outletId = outletId;
+    loading.value = true;
+    error.value = null;
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_key);
-      if (raw == null) return;
-      final decoded = jsonDecode(raw) as List<dynamic>;
-      notifier.value = decoded
-          .map((e) => CartItem.fromJson(e as Map<String, dynamic>))
-          .toList();
-    } catch (_) {
-      // Abaikan: plugin belum siap atau data tersimpan tidak valid.
+      cart.value = await _repo.fetch(outletId);
+    } catch (e) {
+      // Jangan hapus isi yang sedang tampil bila refresh gagal; cukup catat
+      // pesan galat agar UI bisa menampilkannya.
+      error.value = apiErrorMessage(e, fallback: 'Gagal memuat keranjang.');
+    } finally {
+      loading.value = false;
     }
   }
 
-  Future<void> _save() async {
+  /// Muat keranjang untuk outlet yang sedang dipilih (bila ada). Dipanggil saat
+  /// aplikasi start dan setiap kali outlet berpindah.
+  Future<void> syncWithSelectedOutlet() async {
+    final id = outletStore.outletId;
+    if (id == null) {
+      _outletId = null;
+      cart.value = ServerCart.empty();
+      return;
+    }
+    if (id == _outletId) return;
+    await loadFor(id);
+  }
+
+  /// Tambah menu ke keranjang outlet ini (POST). Melempar [ApiException] bila
+  /// gagal (mis. stok tidak tersedia).
+  Future<void> add(
+    int outletId, {
+    required int menuId,
+    int quantity = 1,
+    List<Map<String, dynamic>>? props,
+  }) async {
+    await _mutate(
+      outletId,
+      () => _repo.add(
+        outletId,
+        menuId: menuId,
+        quantity: quantity,
+        props: props,
+      ),
+    );
+  }
+
+  /// Setel jumlah satu baris. Bila ≤ 0, baris dihapus (server tidak menerima
+  /// quantity 0).
+  Future<void> setQty(int outletId, int cartId, int quantity) async {
+    if (quantity <= 0) return remove(outletId, cartId);
+    await _mutate(
+      outletId,
+      () => _repo.updateQty(outletId, cartId, quantity: quantity),
+    );
+  }
+
+  Future<void> remove(int outletId, int cartId) async {
+    await _mutate(outletId, () => _repo.remove(outletId, cartId));
+  }
+
+  Future<void> clear(int outletId) async {
+    await _mutate(outletId, () => _repo.clear(outletId));
+  }
+
+  /// Cek stok sebelum bayar. Melempar [ApiException] bila gagal.
+  Future<bool> validate(int outletId) => _repo.validate(outletId);
+
+  Future<void> _mutate(
+    int outletId,
+    Future<ServerCart> Function() op,
+  ) async {
+    _outletId = outletId;
+    loading.value = true;
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-        _key,
-        jsonEncode(items.map((e) => e.toJson()).toList()),
-      );
-    } catch (_) {
-      // Abaikan kegagalan penyimpanan (best-effort).
+      cart.value = await op();
+      error.value = null;
+    } finally {
+      loading.value = false;
     }
-  }
-
-  /// Tambah [product] ke keranjang. Bila sudah ada, jumlahnya ditambah dan
-  /// catatan diperbarui bila [note] diisi.
-  void add(Product product, {int qty = 1, String note = ''}) {
-    final list = List.of(items);
-    final idx = list.indexWhere((e) => e.product.id == product.id);
-    if (idx >= 0) {
-      final existing = list[idx];
-      list[idx] = existing.copyWith(
-        qty: existing.qty + qty,
-        note: note.isNotEmpty ? note : existing.note,
-      );
-    } else {
-      list.add(CartItem(product: product, qty: qty, note: note));
-    }
-    notifier.value = list;
-    _save();
-  }
-
-  /// Setel jumlah baris [productId]. Bila ≤ 0, baris dihapus.
-  void setQty(String productId, int qty) {
-    final list = List.of(items);
-    final idx = list.indexWhere((e) => e.product.id == productId);
-    if (idx < 0) return;
-    if (qty <= 0) {
-      list.removeAt(idx);
-    } else {
-      list[idx] = list[idx].copyWith(qty: qty);
-    }
-    notifier.value = list;
-    _save();
-  }
-
-  void setNote(String productId, String note) {
-    final list = List.of(items);
-    final idx = list.indexWhere((e) => e.product.id == productId);
-    if (idx < 0) return;
-    list[idx] = list[idx].copyWith(note: note);
-    notifier.value = list;
-    _save();
-  }
-
-  void remove(String productId) => setQty(productId, 0);
-
-  void clear() {
-    notifier.value = [];
-    _save();
   }
 }
 
-/// Instance global keranjang (dummy). Dimuat dari lokal saat `main()`.
-final CartStore cartStore = CartStore();
+/// Instance global siap pakai (sejalan dengan `authStore`, `outletStore`).
+final CartStore cartStore = CartStore(cartRepository);

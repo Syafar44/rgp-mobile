@@ -4,14 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/config/fees.dart';
+import '../core/network/api_error.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/formatter.dart';
+import '../core/utils/wita.dart';
 import '../data/address_store.dart';
 import '../data/cart_store.dart';
 import '../data/dummy/dummy_data.dart';
-import '../data/models/cart_item.dart';
+import '../data/models/cart.dart';
 import '../data/models/saved_address.dart';
-import '../data/notifiers.dart';
+import '../data/order_repository.dart';
+import 'order_detail_page.dart';
 import 'outlet_page.dart';
 
 /// Metode pembayaran (dummy). Ikon Material dipakai sebagai pengganti logo.
@@ -84,9 +87,27 @@ class _CheckoutPageState extends State<CheckoutPage> {
   bool _redeemPoints = false;
   bool _kantungBelanja = false;
   int _payMethod = 0;
-  String? _scheduleLabel; // null = Pickup Sekarang
+
+  /// Jam ambil pilihan pembeli (jam dinding WITA). Null = "Pickup Sekarang";
+  /// server memakai bawaannya, yaitu 1 jam dari sekarang.
+  DateTime? _pickupAt;
+
+  /// Catatan untuk outlet (`keterangan`, maks 255 karakter).
+  final TextEditingController _note = TextEditingController();
+
+  /// True selama `POST .../checkout` berjalan.
+  bool _placing = false;
 
   bool get _isDelivery => widget.isDelivery;
+
+  String? get _scheduleLabel =>
+      _pickupAt == null ? null : formatJamWita(_pickupAt!);
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
 
   // --- Rincian harga --------------------------------------------------------
 
@@ -121,30 +142,59 @@ class _CheckoutPageState extends State<CheckoutPage> {
   }
 
   Future<void> _schedulePickup() async {
-    final result = await showModalBottomSheet<String?>(
+    final result = await showModalBottomSheet<Object?>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
       builder: (_) => const _SchedulePickupSheet(),
     );
-    // Sentinel 'now' berarti "Pickup Sekarang".
-    if (result != null) {
-      setState(() => _scheduleLabel = result == 'now' ? null : result);
+    if (result == null) return;
+    // Sentinel 'now' berarti "Pickup Sekarang" (pickup_at tidak dikirim).
+    setState(() => _pickupAt = result is DateTime ? result : null);
+  }
+
+  /// Ubah keranjang menjadi pesanan (`POST .../checkout`).
+  ///
+  /// Server yang menghitung ulang harga & memotong keranjang; aplikasi hanya
+  /// mengirim jam ambil dan catatan.
+  Future<void> _placeOrder() async {
+    FocusScope.of(context).unfocus();
+    setState(() => _placing = true);
+    try {
+      final order = await orderRepository.checkout(
+        widget.outlet.id,
+        pickupAt: _pickupAt,
+        keterangan: _note.text,
+      );
+      // Server sudah mengosongkan keranjang; samakan keadaan lokal.
+      await cartStore.loadFor(widget.outlet.id);
+      if (!mounted) return;
+
+      // Ganti halaman checkout dengan detail pesanan supaya tombol kembali
+      // tidak membawa pembeli ke checkout keranjang yang sudah kosong.
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => OrderDetailPage(
+            orderId: order.id,
+            initialOrder: order,
+            showSuccessBanner: true,
+          ),
+        ),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _placing = false);
+      _showOrderError(e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _placing = false);
+      _showOrderError(apiErrorMessage(e));
     }
   }
 
-  void _pay() {
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    final method = _payMethods[_payMethod].name;
-    cartStore.clear();
-    navigator.popUntil((r) => r.isFirst);
-    selectedPageNotifier.value = 3; // tab History
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text('Pesanan dibayar via $method (dummy)'),
-        duration: const Duration(seconds: 2),
-      ),
+  void _showOrderError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
     );
   }
 
@@ -185,9 +235,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
             },
           ),
         ),
-        body: ValueListenableBuilder<List<CartItem>>(
-          valueListenable: cartStore.notifier,
-          builder: (context, items, _) {
+        body: ValueListenableBuilder<ServerCart>(
+          valueListenable: cartStore.cart,
+          builder: (context, cart, _) {
+            final items = cart.items;
             if (items.isEmpty) {
               return const Center(child: Text('Keranjang kosong'));
             }
@@ -225,6 +276,8 @@ class _CheckoutPageState extends State<CheckoutPage> {
                 const SizedBox(height: 12),
                 const _VoucherRow(),
                 const SizedBox(height: 16),
+                _NoteField(controller: _note),
+                const SizedBox(height: 16),
                 _Breakdown(
                   subtotal: _subtotal,
                   deliveryFee: _deliveryFee,
@@ -234,6 +287,12 @@ class _CheckoutPageState extends State<CheckoutPage> {
                   redeem: _redeem,
                   total: _total,
                 ),
+                const SizedBox(height: 12),
+                _ServerTotalNotice(serverTotal: cart.total),
+                if (_isDelivery) ...[
+                  const SizedBox(height: 12),
+                  const _DeliveryUnavailableNotice(),
+                ],
               ],
             );
           },
@@ -243,7 +302,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
           showSchedule: !_isDelivery,
           scheduleLabel: _scheduleLabel,
           onSchedule: _schedulePickup,
-          onPay: _pay,
+          // Endpoint checkout hanya membuat pesanan pickup; pengantaran belum
+          // ada di API, jadi jangan biarkan pesanan delivery terkirim.
+          onPay: (_placing || _isDelivery) ? null : _placeOrder,
+          loading: _placing,
         ),
       ),
     );
@@ -625,11 +687,11 @@ class _PayCard extends StatelessWidget {
 class _OrderSummary extends StatelessWidget {
   const _OrderSummary({required this.items});
 
-  final List<CartItem> items;
+  final List<ServerCartItem> items;
 
   @override
   Widget build(BuildContext context) {
-    final count = items.fold<int>(0, (s, e) => s + e.qty);
+    final count = items.fold<int>(0, (s, e) => s + e.quantity);
     return Container(
       decoration: _cardDecoration(),
       child: Column(
@@ -658,13 +720,13 @@ class _OrderSummary extends StatelessWidget {
               child: Row(
                 children: [
                   Text(
-                    '${item.qty} x',
+                    '${item.quantity} x',
                     style: TextStyle(fontSize: 13, color: AppColors.grey600),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      item.product.name,
+                      item.title,
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         color: AppColors.textDark,
@@ -869,6 +931,105 @@ class _VoucherRow extends StatelessWidget {
 // RINCIAN HARGA
 // =============================================================================
 
+/// Catatan untuk outlet — dikirim sebagai `keterangan` saat checkout.
+class _NoteField extends StatelessWidget {
+  const _NoteField({required this.controller});
+
+  final TextEditingController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      maxLines: 2,
+      maxLength: 255, // batas server
+      textCapitalization: TextCapitalization.sentences,
+      decoration: InputDecoration(
+        labelText: 'Catatan untuk outlet (opsional)',
+        hintText: 'cth: Tolong dipisah bungkusnya',
+        filled: true,
+        fillColor: AppColors.white,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.grey300),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.maroon700, width: 1.5),
+        ),
+      ),
+    );
+  }
+}
+
+/// Mengingatkan bahwa nilai yang ditagih kasir adalah total dari server.
+///
+/// Poin, voucher, kantung belanja & ongkir masih dihitung di aplikasi (belum
+/// ada endpointnya), sehingga bisa berbeda dari tagihan sebenarnya.
+class _ServerTotalNotice extends StatelessWidget {
+  const _ServerTotalNotice({required this.serverTotal});
+
+  final int serverTotal;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.creamSurface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.grey100),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, size: 16, color: AppColors.grey600),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Yang ditagih kasir: ${formatRupiah(serverTotal)}. Poin, '
+              'voucher, dan biaya tambahan di atas belum dihitung server.',
+              style: const TextStyle(fontSize: 12, color: AppColors.grey600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Pengantaran belum ada di API (menyusul lewat GoSend) — pesanan yang dibuat
+/// endpoint checkout selalu pickup, jadi alur delivery sengaja dikunci.
+class _DeliveryUnavailableNotice extends StatelessWidget {
+  const _DeliveryUnavailableNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.local_shipping_outlined, size: 18, color: AppColors.warning),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Pengantaran belum tersedia. Untuk sekarang pesanan hanya bisa '
+              'diambil di outlet — kembali dan pilih Pickup.',
+              style: TextStyle(fontSize: 12, color: AppColors.textDark),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _Breakdown extends StatelessWidget {
   const _Breakdown({
     required this.subtotal,
@@ -953,13 +1114,18 @@ class _CheckoutBottomBar extends StatelessWidget {
     required this.scheduleLabel,
     required this.onSchedule,
     required this.onPay,
+    this.loading = false,
   });
 
   final int total;
   final bool showSchedule;
   final String? scheduleLabel;
   final VoidCallback onSchedule;
-  final VoidCallback onPay;
+
+  /// Null = tombol dimatikan (mis. delivery belum didukung API).
+  final VoidCallback? onPay;
+
+  final bool loading;
 
   @override
   Widget build(BuildContext context) {
@@ -1002,23 +1168,35 @@ class _CheckoutBottomBar extends StatelessWidget {
               child: SizedBox(
                 height: 48,
                 child: FilledButton(
-                  onPressed: onPay,
+                  onPressed: loading ? null : onPay,
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.maroon700,
+                    disabledBackgroundColor: AppColors.grey300,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      'Bayar - ${formatRupiah(total)}',
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
+                  child: loading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppColors.white,
+                          ),
+                        )
+                      : FittedBox(
+                          fit: BoxFit.scaleDown,
+                          // Pesanan dibuat tanpa pembayaran — pembeli membayar
+                          // di kasir saat mengambil, jadi bukan "Bayar".
+                          child: Text(
+                            'Pesan - ${formatRupiah(total)}',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                 ),
               ),
             ),
@@ -1152,24 +1330,28 @@ class _SchedulePickupSheet extends StatefulWidget {
 }
 
 class _SchedulePickupSheetState extends State<_SchedulePickupSheet> {
-  late final List<String> _slots = _buildSlots();
+  /// Awal tiap slot, dalam jam dinding WITA — jam ambil mengacu pada jam
+  /// outlet, bukan jam perangkat pembeli.
+  late final List<DateTime> _starts = _buildStarts();
   int _index = 0;
 
-  static String _two(int n) => n.toString().padLeft(2, '0');
-
-  List<String> _buildSlots() {
-    final now = DateTime.now();
+  List<DateTime> _buildStarts() {
+    final now = nowWita();
     // Bulatkan ke kelipatan 15 menit berikutnya.
     final add = 15 - (now.minute % 15);
-    var start = now.add(Duration(minutes: add == 0 ? 15 : add));
-    final list = <String>[];
-    for (var i = 0; i < 16; i++) {
-      final s = start.add(Duration(minutes: 15 * i));
-      final e = s.add(const Duration(minutes: 15));
-      list.add('${_two(s.hour)}:${_two(s.minute)} - '
-          '${_two(e.hour)}:${_two(e.minute)}');
-    }
-    return list;
+    final start = now
+        .add(Duration(minutes: add == 0 ? 15 : add))
+        .copyWith(second: 0, millisecond: 0, microsecond: 0);
+    return [
+      for (var i = 0; i < 16; i++) start.add(Duration(minutes: 15 * i)),
+    ];
+  }
+
+  /// Label satu slot, mis. `15:00 - 15:15`.
+  String _label(int i) {
+    final s = _starts[i];
+    final e = s.add(const Duration(minutes: 15));
+    return '${formatJamWita(s)} - ${formatJamWita(e)}';
   }
 
   @override
@@ -1190,7 +1372,7 @@ class _SchedulePickupSheetState extends State<_SchedulePickupSheet> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Hari Ini, ${_slots[_index]}',
+              'Hari Ini, ${_label(_index)} WITA',
               style: TextStyle(color: AppColors.grey600),
             ),
             const SizedBox(height: 12),
@@ -1202,10 +1384,10 @@ class _SchedulePickupSheetState extends State<_SchedulePickupSheet> {
                 physics: const FixedExtentScrollPhysics(),
                 onSelectedItemChanged: (i) => setState(() => _index = i),
                 childDelegate: ListWheelChildBuilderDelegate(
-                  childCount: _slots.length,
+                  childCount: _starts.length,
                   builder: (context, i) => Center(
                     child: Text(
-                      _slots[i],
+                      _label(i),
                       style: TextStyle(
                         fontSize: i == _index ? 20 : 16,
                         fontWeight:
@@ -1240,7 +1422,7 @@ class _SchedulePickupSheetState extends State<_SchedulePickupSheet> {
               width: double.infinity,
               height: 48,
               child: FilledButton(
-                onPressed: () => Navigator.pop(context, _slots[_index]),
+                onPressed: () => Navigator.pop(context, _starts[_index]),
                 style: FilledButton.styleFrom(
                   backgroundColor: AppColors.maroon700,
                   shape: RoundedRectangleBorder(

@@ -20,11 +20,16 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
     required this.title,
     this.actions,
     this.showBack = true,
+    this.onBack,
   });
 
   final String title;
   final List<Widget>? actions;
   final bool showBack;
+
+  /// Aksi tombol kembali. Null = perilaku bawaan (`Navigator.pop`). Diisi bila
+  /// halaman perlu mengembalikan nilai saat ditutup.
+  final VoidCallback? onBack;
 
   @override
   Widget build(BuildContext context) {
@@ -38,6 +43,9 @@ class AppTopBar extends StatelessWidget implements PreferredSizeWidget {
         ),
       ),
       automaticallyImplyLeading: showBack,
+      leading: (showBack && onBack != null)
+          ? IconButton(icon: const Icon(Icons.arrow_back), onPressed: onBack)
+          : null,
       actions: actions,
     );
   }
