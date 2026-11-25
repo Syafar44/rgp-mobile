@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/config/app_images.dart';
+import '../../core/utils/wita.dart';
+import '../models/product.dart';
 import '../models/promo_banner.dart';
 import '../models/saved_address.dart';
 import '../models/vip.dart';
@@ -259,34 +262,252 @@ class DummyData {
   // BANNER PROMO (carousel Beranda)
   // ---------------------------------------------------------------------------
 
+  /// Sementara memakai gambar dari dalam aplikasi sampai API banner siap.
+  /// [PromoBanner.label] tidak ditampilkan — hanya dibaca pembaca layar, jadi
+  /// isinya menirukan teks yang tercetak di dalam desain banner.
   static const List<PromoBanner> banners = [
     PromoBanner(
-      label: 'SETIAP HARI',
-      title: 'Diskon Spesial',
-      highlight: 'hingga 30%',
-      subtitle: 'untuk semua Roti Gembung favoritmu',
-      imageUrl:
-          'https://images.unsplash.com/photo-1608198093002-ad4e005484ec?w=600&q=60&auto=format&fit=crop',
-      badges: ['Disc 10% Member Gold'],
+      image: AppImages.banner1,
+      label: 'Pia Panglima — teman ngemil paling setia',
     ),
     PromoBanner(
-      label: 'PROMO MINUMAN',
-      title: 'Gratis 1 Kopi',
-      highlight: 'Beli 1 Gratis 1',
-      subtitle: 'berlaku tiap hari, semua outlet Panglima',
-      imageUrl:
-          'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=600&q=60&auto=format&fit=crop',
-      badges: ['Tanpa Minimal Order'],
+      image: AppImages.banner2,
+      label: 'Coklatnya auto bikin senyum — fresh from the oven',
     ),
     PromoBanner(
-      label: 'PAKET HEMAT',
-      title: 'Paket Berdua',
-      highlight: 'Rp 29.900',
-      subtitle: '4 roti gembung + 2 minuman pilihan',
-      imageUrl:
-          'https://images.unsplash.com/photo-1600271886742-f049cd451bba?w=600&q=60&auto=format&fit=crop',
-      badges: ['Hemat 15%'],
+      image: AppImages.banner3,
+      label: 'Roti Subuh, hangatnya menemani mengawali hari — coming soon',
     ),
   ];
 
+  // ---------------------------------------------------------------------------
+  // GANTI ITEM TIDAK TERSEDIA (simulasi, khusus build debug)
+  // ---------------------------------------------------------------------------
+  //
+  // Hanya dipanggil `ItemSwapRepository`, yang menolak bekerja bila
+  // `kFiturGantiItem` mati — jadi data ini tidak terpakai di build rilis.
+  // TODO(ganti-item): hapus gate saat modul dirilis
+
+  /// Katalog cadangan bila menu outlet tidak bisa dimuat (tanpa jaringan,
+  /// `.env` kosong, atau di test).
+  ///
+  /// Harganya dipilih supaya ketiga skenario selisih untuk item habis
+  /// bawaan — **Donat Coklat ×2 = Rp16.000** — bisa dicoba langsung:
+  /// - **sama**: Bolen Keju ×2 (Rp16.000)
+  /// - **kurang**: Bakpia Coklat ×2 (Rp10.000) → belum bisa dikonfirmasi,
+  ///   perlu tambah Rp6.000 lagi (belum ada refund)
+  /// - **lebih**: Pizza Mini Sosis ×1 (Rp18.000) → bayar selisih Rp2.000
+  static const List<Product> katalogCadangan = [
+    Product(
+      id: '9101',
+      name: 'Roti Gembung Original',
+      category: 'Roti Gembung',
+      price: 10000,
+      description: '',
+    ),
+    Product(
+      id: '9102',
+      name: 'Roti Gembung Coklat',
+      category: 'Roti Gembung',
+      price: 12000,
+      description: '',
+    ),
+    Product(
+      id: '9103',
+      name: 'Roti Gembung Keju',
+      category: 'Roti Gembung',
+      price: 12000,
+      description: '',
+    ),
+    Product(
+      id: '9201',
+      name: 'Donat Coklat',
+      category: 'Donat',
+      price: 8000,
+      description: '',
+    ),
+    Product(
+      id: '9202',
+      name: 'Donat Gula Halus',
+      category: 'Donat',
+      price: 6000,
+      description: '',
+    ),
+    Product(
+      id: '9203',
+      name: 'Donat Keju',
+      category: 'Donat',
+      price: 8000,
+      description: '',
+    ),
+    Product(
+      id: '9301',
+      name: 'Pizza Mini Sosis',
+      category: 'Pizza',
+      price: 18000,
+      description: '',
+    ),
+    Product(
+      id: '9302',
+      name: 'Pizza Mini Keju',
+      category: 'Pizza',
+      price: 16000,
+      description: '',
+    ),
+    Product(
+      id: '9401',
+      name: 'Bakpia Kacang Hijau',
+      category: 'Bakpia Basah',
+      price: 5000,
+      description: '',
+    ),
+    Product(
+      id: '9402',
+      name: 'Bakpia Coklat',
+      category: 'Bakpia Kering',
+      price: 5000,
+      description: '',
+    ),
+    Product(
+      id: '9501',
+      name: 'Bolen Keju',
+      category: 'Bolen',
+      price: 8000,
+      description: '',
+    ),
+    Product(
+      id: '9502',
+      name: 'Bolen Pisang',
+      category: 'Bolen',
+      price: 9000,
+      description: '',
+    ),
+  ];
+
+  /// Stok tiap produk [katalogCadangan]. Donat Gula Halus sengaja habis
+  /// supaya daftar pengganti tidak terlihat seolah semua selalu ada.
+  static const Map<String, int> _stokKatalogCadangan = {
+    '9101': 12,
+    '9102': 6,
+    '9103': 4,
+    '9201': 0,
+    '9202': 0,
+    '9203': 7,
+    '9301': 3,
+    '9302': 5,
+    '9401': 10,
+    '9402': 8,
+    '9501': 9,
+    '9502': 6,
+  };
+
+  /// Stok tiruan sebuah produk di sebuah outlet.
+  ///
+  /// Produk katalog cadangan memakai tabel tetap. Menu asli outlet memakai
+  /// angka 0–12 yang diturunkan dari id outlet & id produk — tetap sama
+  /// setiap dibuka, berbeda antar-outlet, dan sekitar satu dari tujuh produk
+  /// habis. Hash dihitung sendiri (bukan `String.hashCode`) supaya hasilnya
+  /// tidak bergantung pada versi Dart.
+  static int stokTiruan(int outletId, Product product) {
+    final tetap = _stokKatalogCadangan[product.id];
+    if (tetap != null) return tetap;
+    var h = outletId * 31 + 7;
+    for (final c in product.id.codeUnits) {
+      h = (h * 31 + c) & 0x7fffffff;
+    }
+    final n = h % 14;
+    return n < 2 ? 0 : n - 1;
+  }
+
+  /// Isi pesanan tiruan bila menu outlet tidak tersedia: 3 item, yang
+  /// pertama (Donat Coklat ×2) menjadi item habis bawaan.
+  static const List<({Product product, int qty})> isiPesananTiruan = [
+    (
+      product: Product(
+        id: '9201',
+        name: 'Donat Coklat',
+        category: 'Donat',
+        price: 8000,
+        description: '',
+      ),
+      qty: 2,
+    ),
+    (
+      product: Product(
+        id: '9102',
+        name: 'Roti Gembung Coklat',
+        category: 'Roti Gembung',
+        price: 12000,
+        description: '',
+      ),
+      qty: 1,
+    ),
+    (
+      product: Product(
+        id: '9401',
+        name: 'Bakpia Kacang Hijau',
+        category: 'Bakpia Basah',
+        price: 5000,
+        description: '',
+      ),
+      qty: 2,
+    ),
+  ];
+
+  /// Pesanan berjalan yang sudah dibayar, dalam bentuk respons
+  /// `GET /pos/app/v1/orders/:id` — supaya dibaca oleh parser yang sama
+  /// dengan pesanan asli.
+  static Map<String, dynamic> pesananTiruan({
+    required int id,
+    required int outletId,
+    required String outletName,
+    required List<({Product product, int qty})> isi,
+  }) {
+    final dibuat = nowWita();
+    final subtotal = isi.fold<int>(
+      0,
+      (a, e) => a + e.product.effectivePrice * e.qty,
+    );
+    // Meniru biaya QRIS di server: 0,9% + PPN 11% atas biaya itu.
+    final biaya = (subtotal * 0.009 * 1.11).round();
+    return {
+      'id': id,
+      'document_number': 'SIM$id',
+      'order_id': 'SIM$id',
+      'outlet_id': outletId,
+      'outlet_name': outletName,
+      'status': 'app_paid',
+      'status_label': 'Sedang disiapkan',
+      'total_amount': subtotal,
+      'subtotal_amount': subtotal,
+      'item_count': isi.fold<int>(0, (a, e) => a + e.qty),
+      'amount_fee': biaya,
+      'payment_method': 'qris',
+      'created_at': rfc3339Wita(dibuat),
+      'pickup_at': rfc3339Wita(dibuat.add(const Duration(hours: 1))),
+      'keterangan': 'Pesanan simulasi (debug)',
+      'charges': {
+        'subtotal': subtotal,
+        'paid_by_customer': subtotal + biaya,
+        'items': [
+          {
+            'label': 'Biaya QRIS',
+            'amount': biaya,
+            'charge_type': 'PAYMENT_FEE',
+            'bearer': 'CUSTOMER',
+          },
+        ],
+      },
+      'lines': [
+        for (final e in isi)
+          {
+            'menu_id': int.tryParse(e.product.id) ?? 0,
+            'title': e.product.name,
+            'quantity': e.qty,
+            'price': e.product.effectivePrice,
+            'subtotal': e.product.effectivePrice * e.qty,
+          },
+      ],
+    };
+  }
 }

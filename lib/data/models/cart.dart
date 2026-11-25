@@ -26,6 +26,21 @@ class ServerCart {
   /// Total unit (jumlah semua quantity) — untuk badge/bilah keranjang.
   int get count => items.fold(0, (sum, e) => sum + e.quantity);
 
+  /// Kapan keranjang ini kedaluwarsa (yang paling cepat di antara barisnya).
+  ///
+  /// Keranjang server hidup 30 menit dan diperpanjang tiap aktivitas. Bila
+  /// pembeli kembali setelah lewat, keranjang tinggal kosong — itu wajar,
+  /// bukan galat.
+  DateTime? get expiresAt {
+    DateTime? soonest;
+    for (final item in items) {
+      final e = item.expiresAt;
+      if (e == null) continue;
+      if (soonest == null || e.isBefore(soonest)) soonest = e;
+    }
+    return soonest;
+  }
+
   factory ServerCart.empty() => const ServerCart();
 
   factory ServerCart.fromJson(Map<String, dynamic> json) {

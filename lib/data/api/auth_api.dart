@@ -61,6 +61,30 @@ class AuthApi {
     return _dio.post<dynamic>('/resend_verify', data: {'email': email});
   }
 
+  /// `POST /customer/forgot-password` — minta kode reset ke email. Publik.
+  ///
+  /// Balasannya SELALU `200` yang sama, terdaftar maupun tidak — jangan
+  /// dipakai untuk mengecek apakah sebuah email sudah punya akun.
+  Future<Response<dynamic>> forgotPassword({required String email}) {
+    return _dio.post<dynamic>(
+      '/customer/forgot-password',
+      data: {'email': email},
+    );
+  }
+
+  /// `POST /customer/reset-password` — periksa kode lalu ganti kata sandi.
+  /// Publik. Balasan `200` TIDAK berisi token; panggil [auth] setelahnya.
+  Future<Response<dynamic>> resetPassword({
+    required String email,
+    required String code,
+    required String password,
+  }) {
+    return _dio.post<dynamic>(
+      '/customer/reset-password',
+      data: {'email': email, 'code': code, 'password': password},
+    );
+  }
+
   /// `GET /me` — data dari klaim token JWT yang sedang dipakai.
   ///
   /// Catatan: `/me` membaca klaim token, bukan database. Bila token belum

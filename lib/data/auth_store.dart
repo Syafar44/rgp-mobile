@@ -4,7 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/network/dio_client.dart';
+import '../core/utils/app_log.dart';
 import 'models/auth_session.dart';
+import 'models/customer_profile.dart';
 import 'models/user_account.dart';
 import 'models/user_profile.dart';
 
@@ -34,9 +36,21 @@ class AuthStore {
   /// Akun yang pernah masuk di perangkat ini.
   final List<UserAccount> _users = [];
 
+  /// Kapan token yang sedang dipakai diterbitkan.
+  DateTime? _tokenAt;
+
   static const String _kUsers = 'auth_users_v2';
   static const String _kCurrent = 'auth_current_v2';
   static const String _kToken = 'auth_token_v2';
+  static const String _kTokenAt = 'auth_token_at_v2';
+
+  /// Masa berlaku token dari server (dikonfirmasi tim backend: 1 hari).
+  ///
+  /// Dipakai untuk memulangkan pembeli ke layar masuk **sebelum** ia menabrak
+  /// 401 di tengah memesan. Interceptor di `dio_client` tetap ada sebagai
+  /// jaring pengaman — kalau server memperpendek masa berlakunya, atau token
+  /// dicabut lebih awal, yang menangkap adalah interceptor itu.
+  static const Duration tokenLifetime = Duration(days: 1);
 
   bool get isLoggedIn => currentUser.value != null;
 
@@ -81,6 +95,8 @@ class AuthStore {
       emailVerified: newSession.emailVerified,
     );
     setAuthToken(newSession.token);
+    // Token baru → masa berlakunya dihitung dari sekarang.
+    _tokenAt = DateTime.now();
     _upsert(account);
     session.value = newSession;
     currentUser.value = account;
@@ -107,8 +123,53 @@ class AuthStore {
     await _save();
   }
 
+  /// Selaraskan akun aktif dengan `GET /customer/me`.
+  ///
+  /// Inilah sumber nomor HP & alamat: `/auth` maupun `/me` tidak
+  /// mengirimkannya, hanya grup `/customer` yang punya.
+  Future<void> applyCustomer(CustomerProfile profile) async {
+    final cur = currentUser.value;
+    if (cur == null) return;
+    final updated = UserAccount(
+      phone: profile.contact.trim().isEmpty ? cur.phone : profile.contact.trim(),
+      name: profile.name.trim().isEmpty ? cur.name : profile.name.trim(),
+      email: profile.email.trim().isEmpty ? cur.email : profile.email.trim(),
+      id: cur.id,
+      address: profile.address.trim().isEmpty ? cur.address : profile.address,
+      emailVerified: cur.emailVerified,
+    );
+    _upsert(updated);
+    currentUser.value = updated;
+    await _save();
+  }
+
+  /// Simpan nomor HP akun aktif.
+  ///
+  /// Perlu ada karena `/auth` maupun `/me` tidak mengirim `contact` — nomor
+  /// hanya diketahui saat mendaftar, atau saat pembeli mengetikkannya sendiri
+  /// (mis. ketika gateway pembayaran memintanya). Menyimpannya membuat
+  /// pertanyaan itu cukup sekali per perangkat.
+  Future<void> setPhone(String phone) async {
+    final cur = currentUser.value;
+    final trimmed = phone.trim();
+    if (cur == null || trimmed.isEmpty || cur.phone == trimmed) return;
+
+    final updated = UserAccount(
+      phone: trimmed,
+      name: cur.name,
+      email: cur.email,
+      id: cur.id,
+      address: cur.address,
+      emailVerified: cur.emailVerified,
+    );
+    _upsert(updated);
+    currentUser.value = updated;
+    await _save();
+  }
+
   void logout() {
     setAuthToken(null);
+    _tokenAt = null;
     session.value = null;
     currentUser.value = null;
     _save();
@@ -126,7 +187,29 @@ class AuthStore {
         }
       }
       final token = prefs.getString(_kToken);
-      if (token != null && token.isNotEmpty) setAuthToken(token);
+      final tokenAt = prefs.getInt(_kTokenAt);
+
+      // Token lewat masa berlaku → jangan dipulihkan sama sekali. Memulihkan
+      // sesi yang sudah mati membuat pembeli menyangka masih masuk, lalu
+      // setiap permintaan ditolak satu per satu.
+      final kedaluwarsa =
+          tokenAt != null &&
+          DateTime.now().millisecondsSinceEpoch - tokenAt >
+              tokenLifetime.inMilliseconds;
+      if (kedaluwarsa) {
+        AppLog.info('AUTH', 'sesi tersimpan sudah lewat 1 hari — dibersihkan');
+        await prefs.remove(_kCurrent);
+        await prefs.remove(_kToken);
+        await prefs.remove(_kTokenAt);
+        return;
+      }
+
+      if (token != null && token.isNotEmpty) {
+        setAuthToken(token);
+        _tokenAt = tokenAt == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(tokenAt);
+      }
 
       final cur = prefs.getString(_kCurrent);
       if (cur != null) currentUser.value = findAccount(cur);
@@ -157,6 +240,7 @@ class AuthStore {
       if (cur == null) {
         await prefs.remove(_kCurrent);
         await prefs.remove(_kToken);
+        await prefs.remove(_kTokenAt);
       } else {
         // Email adalah identitas di server; nomor HP hanya pelengkap lokal.
         await prefs.setString(
@@ -166,8 +250,13 @@ class AuthStore {
         final token = authToken;
         if (token == null || token.isEmpty) {
           await prefs.remove(_kToken);
+          await prefs.remove(_kTokenAt);
         } else {
           await prefs.setString(_kToken, token);
+          final at = _tokenAt;
+          if (at != null) {
+            await prefs.setInt(_kTokenAt, at.millisecondsSinceEpoch);
+          }
         }
       }
     } catch (_) {

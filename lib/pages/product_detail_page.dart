@@ -4,8 +4,12 @@ import '../core/network/api_error.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/formatter.dart';
 import '../data/cart_store.dart';
+import '../data/models/order.dart';
 import '../data/models/product.dart';
+import '../data/order_store.dart';
 import '../data/outlet_store.dart';
+import '../widgets/ongoing_order_guard.dart';
+import '../widgets/verified_email_guard.dart';
 import '../widgets/product_card.dart';
 
 /// Halaman detail produk: hero gambar, deskripsi, paket hemat (upsell),
@@ -24,6 +28,28 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
 
   /// True selama permintaan tambah-ke-keranjang berlangsung (cegah dobel-tap).
   bool _adding = false;
+
+  /// Varian pilihan untuk menu paket: `menu_id` → jumlah **per satu paket**
+  /// (server yang mengalikannya dengan jumlah paket).
+  final Map<int, int> _variantQty = {};
+
+  bool get _isPackage => widget.product.isPackage;
+
+  int get _variantTotal => _variantQty.values.fold(0, (a, b) => a + b);
+
+  /// Paket wajib berisi varian sebanyak `max_qty` — tidak boleh kurang/lebih.
+  bool get _variantsComplete =>
+      !_isPackage || _variantTotal == widget.product.maxQty;
+
+  void _setVariant(int menuId, int qty) {
+    setState(() {
+      if (qty <= 0) {
+        _variantQty.remove(menuId);
+      } else {
+        _variantQty[menuId] = qty;
+      }
+    });
+  }
 
   Future<void> _addToCart() async {
     final outletId = outletStore.outletId;
@@ -51,9 +77,42 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
       return;
     }
 
+    if (!_variantsComplete) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Pilih tepat ${widget.product.maxQty} varian untuk paket ini.',
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    // Email belum terverifikasi → keranjang pun tidak boleh diisi.
+    if (!await ensureEmailVerified(context) || !mounted) return;
+
+    // Satu pesanan pada satu waktu — keranjang pun tidak boleh diisi selama
+    // masih ada pesanan berjalan, supaya pembeli tidak menumpuk belanjaan
+    // yang ujungnya tertahan di checkout.
+    if (!await ensureNoOngoingOrder(context, refresh: false) || !mounted) {
+      return;
+    }
+
     setState(() => _adding = true);
     try {
-      await cartStore.add(outletId, menuId: menuId, quantity: _qty);
+      await cartStore.add(
+        outletId,
+        menuId: menuId,
+        quantity: _qty,
+        // Paket wajib mengirim props; qty di sini per SATU paket.
+        props: _isPackage
+            ? [
+                for (final e in _variantQty.entries)
+                  {'menu_id': e.key, 'quantity': e.value},
+              ]
+            : null,
+      );
       if (!mounted) return;
       navigator.pop();
       messenger.showSnackBar(
@@ -89,6 +148,15 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
         slivers: [
           SliverToBoxAdapter(child: _Hero(product: p)),
           SliverToBoxAdapter(child: _Header(product: p)),
+          if (_isPackage)
+            SliverToBoxAdapter(
+              child: _VariantPicker(
+                product: p,
+                selected: _variantQty,
+                total: _variantTotal,
+                onChanged: _setVariant,
+              ),
+            ),
           const SliverToBoxAdapter(child: SizedBox(height: 24)),
         ],
       ),
@@ -98,7 +166,145 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
         loading: _adding,
         onMinus: () => setState(() => _qty = _qty > 1 ? _qty - 1 : 1),
         onPlus: () => setState(() => _qty++),
-        onAdd: _adding ? null : _addToCart,
+        onAdd: (_adding || !_variantsComplete) ? null : _addToCart,
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// PILIH VARIAN PAKET
+// =============================================================================
+
+/// Pemilih isi paket. Jumlah yang dipilih harus tepat `max_qty` per satu paket;
+/// server yang mengalikannya dengan jumlah paket yang dipesan.
+class _VariantPicker extends StatelessWidget {
+  const _VariantPicker({
+    required this.product,
+    required this.selected,
+    required this.total,
+    required this.onChanged,
+  });
+
+  final Product product;
+  final Map<int, int> selected;
+  final int total;
+  final void Function(int menuId, int qty) onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final max = product.maxQty;
+    final complete = total == max;
+    final sisa = max - total;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Pilih Isi Paket',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: (complete ? AppColors.success : AppColors.warning)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '$total / $max',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: complete ? AppColors.success : AppColors.warning,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            complete
+                ? 'Pilihan lengkap. Jumlah ini berlaku untuk satu paket.'
+                : sisa > 0
+                ? 'Pilih $sisa varian lagi untuk satu paket.'
+                : 'Kurangi ${-sisa} varian — melebihi isi paket.',
+            style: TextStyle(fontSize: 12, color: AppColors.grey600),
+          ),
+          const SizedBox(height: 12),
+          for (final v in product.variants)
+            _VariantRow(
+              variant: v,
+              qty: selected[v.id] ?? 0,
+              canAdd: total < max,
+              onChanged: (qty) => onChanged(v.id, qty),
+            ),
+          if (product.variants.isEmpty)
+            Text(
+              'Varian paket belum tersedia dari server.',
+              style: TextStyle(fontSize: 12, color: AppColors.grey600),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VariantRow extends StatelessWidget {
+  const _VariantRow({
+    required this.variant,
+    required this.qty,
+    required this.canAdd,
+    required this.onChanged,
+  });
+
+  final MenuVariant variant;
+  final int qty;
+  final bool canAdd;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              variant.title,
+              style: const TextStyle(fontSize: 14, color: AppColors.textDark),
+            ),
+          ),
+          IconButton(
+            onPressed: qty > 0 ? () => onChanged(qty - 1) : null,
+            icon: const Icon(Icons.remove_circle_outline),
+            color: AppColors.maroon700,
+            iconSize: 22,
+          ),
+          SizedBox(
+            width: 24,
+            child: Text(
+              '$qty',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          IconButton(
+            onPressed: canAdd ? () => onChanged(qty + 1) : null,
+            icon: const Icon(Icons.add_circle_outline),
+            color: AppColors.maroon700,
+            iconSize: 22,
+          ),
+        ],
       ),
     );
   }
@@ -264,6 +470,15 @@ class _AddBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Selama ada pesanan berjalan, keranjang tidak boleh diisi. Ditampilkan di
+    // tombolnya langsung — pembeli tahu sebelum menekan, bukan sesudah.
+    return ValueListenableBuilder<List<Order>>(
+      valueListenable: orderStore.active,
+      builder: (context, orders, _) => _bar(terkunci: orders.isNotEmpty),
+    );
+  }
+
+  Widget _bar({required bool terkunci}) {
     return SafeArea(
       top: false,
       child: Container(
@@ -280,7 +495,7 @@ class _AddBar extends StatelessWidget {
               child: SizedBox(
                 height: 50,
                 child: FilledButton(
-                  onPressed: onAdd,
+                  onPressed: terkunci ? null : onAdd,
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.maroon700,
                     shape: RoundedRectangleBorder(
@@ -298,12 +513,23 @@ class _AddBar extends StatelessWidget {
                         )
                       : FittedBox(
                           fit: BoxFit.scaleDown,
-                          child: Text(
-                            '+ Keranjang  ${formatRupiah(total)}',
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                            ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (terkunci) ...[
+                                const Icon(Icons.lock_outline, size: 16),
+                                const SizedBox(width: 6),
+                              ],
+                              Text(
+                                terkunci
+                                    ? 'Ada pesanan berjalan'
+                                    : '+ Keranjang  ${formatRupiah(total)}',
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                 ),

@@ -1,17 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'core/push/push_service.dart';
 import 'core/theme/app_colors.dart';
+import 'data/nearest_outlet.dart';
 import 'data/notifiers.dart';
+import 'data/order_store.dart';
 import 'data/outlet_store.dart';
 import 'pages/beranda_page.dart';
-import 'pages/history_page.dart';
 import 'pages/menu_page.dart';
 import 'pages/outlet_page.dart';
+import 'pages/orders_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/vip_page.dart';
+import 'widgets/active_order_bar.dart';
 import 'widgets/cart_bar.dart';
 import 'widgets/navbar_widget.dart';
+import 'widgets/outlet_switch.dart';
 
 /// Kerangka utama aplikasi: halaman aktif + bottom navigation.
 ///
@@ -36,7 +41,7 @@ class _WidgetTreeState extends State<WidgetTree> {
     BerandaPage(),
     MenuPage(),
     VipPage(),
-    _MainPage(title: 'History', child: HistoryPage()),
+    _OrdersTab(),
     ProfilePage(),
   ];
 
@@ -48,6 +53,29 @@ class _WidgetTreeState extends State<WidgetTree> {
   void initState() {
     super.initState();
     selectedPageNotifier.addListener(_guardMenu);
+    // Dipanggil di sini, bukan di `main()`, supaya ikut jalan setelah pengguna
+    // baru saja masuk — kerangka ini dibangun ulang tiap sesi dimulai.
+    orderStore.refresh();
+    _siapkanSesi();
+  }
+
+  /// Persiapan sekali jalan tiap sesi dimulai.
+  ///
+  /// Keduanya berpotensi memunculkan dialog izin sistem, jadi dijalankan
+  /// **berurutan** — dua dialog yang menumpuk sekaligus membuat orang menekan
+  /// "Tolak" tanpa membaca. Lokasi didahulukan karena hasilnya langsung
+  /// terlihat di layar (outlet terisi sendiri), sehingga alasan aplikasi
+  /// memintanya lebih mudah dipahami.
+  Future<void> _siapkanSesi() async {
+    // Menebak outlet terdekat supaya pembeli tidak wajib memilih manual.
+    // Tidak meminta izin apa pun bila outletnya sudah ada.
+    await autoSelectNearestOutlet();
+
+    // Izin notifikasi diminta di sini, bukan saat aplikasi pertama dibuka:
+    // pembeli yang sudah masuk lebih paham kenapa aplikasi ini perlu
+    // memberitahunya (pesanan siap diambil). Tidak melakukan apa pun bila izin
+    // sudah ada atau push dimatikan lewat `.env`.
+    if (mounted) await pushService.askPermission();
   }
 
   @override
@@ -87,7 +115,9 @@ class _WidgetTreeState extends State<WidgetTree> {
       MaterialPageRoute(builder: (_) => const OutletPage()),
     );
     if (!mounted || outlet == null) return;
-    outletStore.select(outlet);
+    // Keranjang masih kosong di alur ini, tapi tetap lewat helper yang sama
+    // supaya aturan "satu pembeli satu outlet" ditegakkan di satu tempat.
+    if (!await switchOutlet(context, outlet) || !mounted) return;
     Navigator.of(context).pop(); // tutup modal
     selectedPageNotifier.value = _menuIndex; // kini boleh ke Menu
   }
@@ -108,7 +138,7 @@ class _WidgetTreeState extends State<WidgetTree> {
             // Bilah keranjang selalu tampil di atas navbar saat keranjang berisi.
             bottomNavigationBar: const Column(
               mainAxisSize: MainAxisSize.min,
-              children: [CartBar(), NavbarWidget()],
+              children: [ActiveOrderBar(), CartBar(), NavbarWidget()],
             ),
           ),
         );
@@ -183,28 +213,25 @@ class _OutletRequiredSheet extends StatelessWidget {
   }
 }
 
-/// Pembungkus tab utama non-Beranda: SafeArea + judul sederhana.
-class _MainPage extends StatelessWidget {
-  const _MainPage({required this.title, required this.child});
-
-  final String title;
-  final Widget child;
+/// Tab "History" pada navigasi bawah: pesanan berjalan & riwayat.
+class _OrdersTab extends StatelessWidget {
+  const _OrdersTab();
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
+    return const SafeArea(
       bottom: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
             child: Text(
-              title,
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              'Pesanan',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
             ),
           ),
-          Expanded(child: child),
+          Expanded(child: OrdersTabs()),
         ],
       ),
     );

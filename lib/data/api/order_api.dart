@@ -14,16 +14,24 @@ class OrderApi {
   /// `POST /pos/app/v1/outlets/:id/checkout` — ubah seluruh keranjang outlet
   /// ini menjadi satu pesanan `app_pending`.
   ///
+  /// [paymentMethod] adalah `value` dari `GET /payment/api/v2/payment-methods`
+  /// (mis. `qris`) dan **wajib** — server menolak dengan galat validasi
+  /// `AppOrderCheckoutReq.PaymentMethod` bila kosong. Catatan: dokumen API
+  /// Aplikasi Customer (bagian 4) masih menulis body-nya "semua opsional" dan
+  /// belum menyebut field ini; yang dipakai di sini adalah perilaku server.
+  ///
   /// [pickupAt] dalam RFC3339 WITA (`2026-09-14T15:00:00+08:00`); null =
   /// server memakai 1 jam dari sekarang. [keterangan] maks 255 karakter.
   Future<Response<dynamic>> checkout(
     int outletId, {
+    required String paymentMethod,
     String? pickupAt,
     String? keterangan,
   }) {
     return _dio.post<dynamic>(
       '/pos/app/v1/outlets/$outletId/checkout',
       data: {
+        'payment_method': paymentMethod,
         if (pickupAt != null && pickupAt.isNotEmpty) 'pickup_at': pickupAt,
         if (keterangan != null && keterangan.isNotEmpty)
           'keterangan': keterangan,

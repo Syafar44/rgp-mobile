@@ -1,14 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../core/config/app_features.dart';
+import '../core/config/app_images.dart';
+import '../core/config/app_links.dart';
 import '../core/theme/app_colors.dart';
+import '../data/cart_store.dart';
 import '../data/dummy/dummy_data.dart';
 import '../data/menu_repository.dart';
 import '../data/models/product.dart';
 import '../data/models/promo_banner.dart';
 import '../data/notifiers.dart';
+import '../data/order_store.dart';
 import '../data/outlet_store.dart';
 import '../widgets/product_card.dart';
 import 'outlet_page.dart';
+import '../widgets/outlet_switch.dart';
 
 /// Halaman Beranda — meniru tata letak aplikasi Kopi Kenangan.
 class BerandaPage extends StatefulWidget {
@@ -29,17 +36,39 @@ class _BerandaPageState extends State<BerandaPage> {
   void initState() {
     super.initState();
     outletStore.selected.addListener(_onOutletChanged);
+    selectedPageNotifier.addListener(_onTabChanged);
     _loadMenu();
+    orderStore.refresh();
   }
 
   @override
   void dispose() {
     outletStore.selected.removeListener(_onOutletChanged);
+    selectedPageNotifier.removeListener(_onTabChanged);
     super.dispose();
   }
 
   void _onOutletChanged() {
     if (outletStore.outletId != _menuOutletId) _loadMenu();
+  }
+
+  /// Tiap kembali ke Beranda, tanyakan lagi keadaan pesanan ke server.
+  ///
+  /// Beranda dipilih sebagai titik periksa karena ke sinilah pembeli pulang
+  /// setelah selesai di layar lain. Tanpa ini, bilah "pesanan sedang diproses"
+  /// bisa bertahan di layar setelah pesanannya sebenarnya sudah diserahkan
+  /// kasir atau kedaluwarsa — dan selama bilah itu ada, bilah keranjang
+  /// tersembunyi dan pesanan baru tertahan.
+  ///
+  /// Halaman ini hidup terus di dalam `IndexedStack`, jadi `initState` saja
+  /// tidak cukup: pemeriksaannya harus ikut perpindahan tab.
+  void _onTabChanged() {
+    if (selectedPageNotifier.value != 0) return;
+    orderStore.refresh();
+    // Keranjang ikut ditanyakan ulang: server yang mengosongkannya setelah
+    // pembayaran masuk, jadi tanpa memuat ulang, bilah keranjang bisa muncul
+    // lagi berisi barang yang sebenarnya sudah menjadi pesanan.
+    cartStore.syncWithSelectedOutlet();
   }
 
   Future<void> _loadMenu() async {
@@ -71,7 +100,7 @@ class _BerandaPageState extends State<BerandaPage> {
       context,
       MaterialPageRoute(builder: (_) => const OutletPage()),
     );
-    if (selected != null) outletStore.select(selected);
+    if (selected != null && mounted) await switchOutlet(context, selected);
   }
 
   /// Tarik-untuk-refresh: muat ulang preview menu.
@@ -180,17 +209,28 @@ class _HeaderDelegate extends SliverPersistentHeaderDelegate {
             padding: const EdgeInsets.only(bottom: 16),
             child: Row(
               children: [
-                _LoyaltyPill(
-                  icon: Icons.favorite,
-                  iconColor: AppColors.maroon700,
-                  text: '${DummyData.loyaltyTier} ${DummyData.loyaltyPercent}%',
-                ),
-                const SizedBox(width: 14),
-                _LoyaltyPill(
-                  icon: Icons.stars_rounded,
-                  iconColor: AppColors.gold500,
-                  text: '${DummyData.poin} pts',
-                ),
+                // Selama endpoint loyalty belum ada: satu pill penanda, bukan
+                // dua pill berisi angka karangan. Dua-duanya berbunyi "Segera
+                // hadir" hanya akan terbaca seperti kerusakan.
+                if (AppFeatures.loyalty) ...[
+                  _LoyaltyPill(
+                    icon: Icons.favorite,
+                    iconColor: AppColors.maroon700,
+                    text:
+                        '${DummyData.loyaltyTier} ${DummyData.loyaltyPercent}%',
+                  ),
+                  const SizedBox(width: 14),
+                  _LoyaltyPill(
+                    icon: Icons.stars_rounded,
+                    iconColor: AppColors.gold500,
+                    text: '${DummyData.poin} pts',
+                  ),
+                ] else
+                  _LoyaltyPill(
+                    icon: Icons.stars_rounded,
+                    iconColor: AppColors.grey400,
+                    text: 'Panglima Points · ${AppFeatures.segeraHadir}',
+                  ),
                 const Spacer(),
                 // TODO: ganti dengan ilustrasi awan (di-skip dulu).
               ],
@@ -450,10 +490,18 @@ class _PromoCarouselState extends State<_PromoCarousel> {
   @override
   Widget build(BuildContext context) {
     final banners = DummyData.banners;
+    // Tinggi mengikuti rasio banner supaya gambarnya tampil utuh. Dengan
+    // tinggi tetap, sisi kiri-kanan akan terpotong dan teks di tepi desain
+    // (nomor telepon, ikon media sosial) ikut hilang.
+    const viewport = 0.9; // sama dengan viewportFraction PageView
+    const margin = 12.0; // margin kiri+kanan kartu
+    final cardWidth = MediaQuery.of(context).size.width * viewport - margin;
+    final height = cardWidth / AppImages.bannerAspect;
+
     return Column(
       children: [
         SizedBox(
-          height: 150,
+          height: height,
           child: PageView.builder(
             controller: _controller,
             itemCount: banners.length,
@@ -483,6 +531,11 @@ class _PromoCarouselState extends State<_PromoCarousel> {
   }
 }
 
+/// Satu banner promo — gambar jadi, ditampilkan utuh.
+///
+/// Tidak ada overlay gradien maupun teks dari aplikasi: judul, penawaran, dan
+/// kontak sudah menjadi bagian desain banner, jadi menimpakan teks lagi hanya
+/// akan bertabrakan.
 class _BannerCard extends StatelessWidget {
   const _BannerCard({required this.banner});
 
@@ -497,133 +550,28 @@ class _BannerCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         color: AppColors.maroon900,
       ),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Foto latar (dummy dari sumber gambar gratis).
-          Image.network(
-            banner.imageUrl,
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stack) => const SizedBox.shrink(),
-            loadingBuilder: (context, child, progress) =>
-                progress == null ? child : const SizedBox.shrink(),
-          ),
-          // Overlay gelap agar teks tetap terbaca di atas foto.
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.maroon900.withValues(alpha: 0.92),
-                  AppColors.maroon900.withValues(alpha: 0.55),
-                  AppColors.maroon900.withValues(alpha: 0.05),
-                ],
-                stops: const [0, 0.55, 1],
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
+      child: Semantics(
+        label: banner.label.isEmpty ? 'Banner promo' : banner.label,
+        image: true,
+        child: banner.isNetwork
+            ? Image.network(
+                banner.image,
+                fit: BoxFit.cover,
+                loadingBuilder: (context, child, progress) =>
+                    progress == null ? child : const SizedBox.shrink(),
+                errorBuilder: (context, error, stack) =>
+                    const SizedBox.shrink(),
+              )
+            : Image.asset(
+                banner.image,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stack) =>
+                    const SizedBox.shrink(),
               ),
-            ),
-          ),
-          // Logo kecil pojok kanan atas.
-          const Positioned(
-            top: 10,
-            right: 12,
-            child: CircleAvatar(
-              radius: 14,
-              backgroundColor: AppColors.white,
-              child: Text('🍞', style: TextStyle(fontSize: 14)),
-            ),
-          ),
-          // Konten teks.
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 100, 14),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  banner.label,
-                  style: TextStyle(
-                    color: AppColors.white.withValues(alpha: 0.85),
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                Text(
-                  banner.title,
-                  style: const TextStyle(
-                    color: AppColors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                Text(
-                  banner.highlight,
-                  maxLines: 1,
-                  style: const TextStyle(
-                    color: AppColors.gold500,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w900,
-                    height: 1.15,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  banner.subtitle,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppColors.white.withValues(alpha: 0.85),
-                    fontSize: 10,
-                  ),
-                ),
-                if (banner.badges.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    children: [
-                      for (final b in banner.badges) _BannerBadge(text: b),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
 }
-
-class _BannerBadge extends StatelessWidget {
-  const _BannerBadge({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: AppColors.yellow500,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: AppColors.maroon900,
-          fontSize: 9,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
-}
-
-// =============================================================================
-// QUICK ACTIONS
-// =============================================================================
 
 class _QuickActions extends StatelessWidget {
   const _QuickActions();
@@ -639,7 +587,7 @@ class _QuickActions extends StatelessWidget {
               icon: Icons.receipt_long,
               title: 'Order',
               subtitle: 'Pesan sekarang',
-              onTap: () => selectedPageNotifier.value = 2,
+              onTap: () => selectedPageNotifier.value = menuTabIndex,
             ),
           ),
           const SizedBox(width: 12),
@@ -647,8 +595,11 @@ class _QuickActions extends StatelessWidget {
             child: _ActionCard(
               icon: Icons.delivery_dining,
               title: 'Delivery',
-              badge: 'Disc 40%',
-              onTap: () => selectedPageNotifier.value = 1,
+              // Badge diskon dilepas selama fiturnya terkunci: menjanjikan
+              // potongan untuk layanan yang belum bisa dipakai.
+              subtitle: AppFeatures.segeraHadir,
+              locked: !AppFeatures.delivery,
+              onTap: () => selectedPageNotifier.value = menuTabIndex,
             ),
           ),
         ],
@@ -657,21 +608,24 @@ class _QuickActions extends StatelessWidget {
   }
 }
 
-/// Kartu aksi cepat: chip ikon solid (kontras kuat) + judul + subtitle/badge.
+/// Kartu aksi cepat: chip ikon solid (kontras kuat) + judul + subtitle.
 class _ActionCard extends StatelessWidget {
   const _ActionCard({
     required this.icon,
     required this.title,
     required this.onTap,
     this.subtitle,
-    this.badge,
+    this.locked = false,
   });
 
   final IconData icon;
   final String title;
   final VoidCallback onTap;
   final String? subtitle;
-  final String? badge;
+
+  /// Fitur belum rilis: kartu tetap terlihat tapi redup, bergembok, dan tidak
+  /// bisa ditekan.
+  final bool locked;
 
   @override
   Widget build(BuildContext context) {
@@ -679,7 +633,7 @@ class _ActionCard extends StatelessWidget {
       color: AppColors.creamSurface,
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
-        onTap: onTap,
+        onTap: locked ? null : onTap,
         borderRadius: BorderRadius.circular(16),
         child: Container(
           padding: const EdgeInsets.all(12),
@@ -694,7 +648,7 @@ class _ActionCard extends StatelessWidget {
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: AppColors.maroon700,
+                  color: locked ? AppColors.grey300 : AppColors.maroon700,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(icon, color: AppColors.white, size: 22),
@@ -705,44 +659,43 @@ class _ActionCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    if (badge != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: AppColors.yellow500,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          badge!,
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.maroon900,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: locked
+                                  ? AppColors.grey400
+                                  : AppColors.textDark,
+                            ),
                           ),
                         ),
-                      )
-                    else if (subtitle != null)
+                        if (locked) ...[
+                          const SizedBox(width: 5),
+                          Icon(
+                            Icons.lock_outline,
+                            size: 13,
+                            color: AppColors.grey400,
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    if (subtitle != null)
                       Text(
                         subtitle!,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
-                          color: AppColors.grey600,
+                          color: locked
+                              ? AppColors.grey400
+                              : AppColors.grey600,
                         ),
                       ),
                   ],
@@ -801,6 +754,29 @@ class _MenuGrid extends StatelessWidget {
 class _ContactCard extends StatelessWidget {
   const _ContactCard();
 
+  /// Buka chat WhatsApp layanan pelanggan.
+  Future<void> _bukaWhatsApp(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    var terbuka = false;
+    try {
+      terbuka = await launchUrl(
+        AppLinks.whatsappChat,
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (_) {
+      // Ditangani di bawah — sama seperti gagal dibuka.
+    }
+    if (!terbuka) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'WhatsApp tidak bisa dibuka. Hubungi 08 222 000 2237 lewat chat.',
+          ),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -813,32 +789,43 @@ class _ContactCard extends StatelessWidget {
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColors.creamSurface,
+          Material(
+            color: AppColors.creamSurface,
+            borderRadius: BorderRadius.circular(16),
+            child: InkWell(
+              onTap: () => _bukaWhatsApp(context),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.grey100),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: const BoxDecoration(
-                    color: AppColors.success,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.chat, color: AppColors.white),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.grey100),
                 ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Text(
-                    'Curhat ke 0812 3456 7890 (Chat Only)',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: const BoxDecoration(
+                        color: AppColors.success,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.chat, color: AppColors.white),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Curhat ke 08 222 000 2237 (Chat Only)',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    const Icon(
+                      Icons.chevron_right,
+                      color: AppColors.grey400,
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
           const SizedBox(height: 12),

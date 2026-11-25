@@ -8,8 +8,18 @@ import '../data/models/order.dart';
 /// Warna badge untuk tiap status pesanan (memakai warna status brand).
 Color orderStatusColor(OrderStatus status) {
   switch (status) {
+    // Belum dibayar — butuh tindakan pembeli, sama seperti `app_pending`.
+    case OrderStatus.pending:
     case OrderStatus.appPending:
       return AppColors.warning;
+    // Sudah lunas & sedang disiapkan — belum tuntas, tapi bukan lagi menunggu
+    // pembayaran.
+    case OrderStatus.appPaid:
+      return AppColors.info;
+    // Item habis — pembeli perlu memilih pengganti.
+    case OrderStatus.perluTindakan:
+      return AppColors.warning;
+    case OrderStatus.appReady:
     case OrderStatus.active:
       return AppColors.success;
     case OrderStatus.appCancelled:
@@ -135,12 +145,29 @@ class OrderCard extends StatelessWidget {
                     ),
                   ],
                   const Spacer(),
-                  Text(
-                    formatRupiah(order.totalAmount),
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.maroon700,
-                    ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        formatRupiah(order.displayTotal),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.maroon700,
+                        ),
+                      ),
+                      // Rincian biaya hanya muncul bila server mengirimkannya.
+                      // `GET /orders` belum membawa `charges` — begitu ada,
+                      // baris ini terisi sendiri tanpa perlu diubah lagi.
+                      if (order.displayFee > 0)
+                        Text(
+                          'Termasuk biaya ${formatRupiah(order.displayFee)}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.grey600,
+                          ),
+                        ),
+                    ],
                   ),
                 ],
               ),
@@ -148,7 +175,10 @@ class OrderCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(
                   'Dipesan ${formatTanggal(order.createdAt!)} WITA',
-                  style: const TextStyle(fontSize: 11, color: AppColors.grey400),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.grey400,
+                  ),
                 ),
               ],
             ],

@@ -87,6 +87,36 @@ void main() {
     });
   });
 
+  group('Order.isUsable', () {
+    test('pesanan tanpa id numerik ditolak', () {
+      // Baris seperti ini tidak bisa dibuka lewat `GET /orders/:id`; kalau
+      // diteruskan ke layar status, pembeli hanya melihat kolom kosong.
+      final order = Order.fromJson({
+        'document_number': 'APP1789953412639',
+        'status': 'app_pending',
+      });
+
+      expect(order.id, 0);
+      expect(order.isUsable, isFalse);
+    });
+
+    test('pesanan tanpa nomor dokumen juga ditolak', () {
+      final order = Order.fromJson({'id': 188003, 'status': 'app_pending'});
+
+      expect(order.isUsable, isFalse);
+    });
+
+    test('pesanan lengkap diterima', () {
+      final order = Order.fromJson({
+        'id': 188003,
+        'document_number': 'APP1789358354929',
+        'status': 'app_pending',
+      });
+
+      expect(order.isUsable, isTrue);
+    });
+  });
+
   group('OrderStatus', () {
     test('memetakan kode server ke logika tombol', () {
       expect(OrderStatus.fromCode('app_pending').canCancel, isTrue);
@@ -98,6 +128,25 @@ void main() {
 
       expect(OrderStatus.fromCode('app_cancelled').isCancelled, isTrue);
       expect(OrderStatus.fromCode('voided').isCancelled, isTrue);
+    });
+
+    test('pesanan lunas & siap diambil tetap dihitung berjalan', () {
+      // Status dari dokumen push backend. Keduanya berarti roti belum ada di
+      // tangan pembeli, jadi pesanannya wajib tetap di tab Pesanan — bukan
+      // terlempar ke Riwayat seperti nasib status tak dikenal.
+      final paid = OrderStatus.fromCode('app_paid');
+      expect(paid, OrderStatus.appPaid);
+      expect(paid.isActive, isTrue);
+      expect(paid.isPaid, isTrue);
+      expect(paid.isReady, isFalse);
+      // Sudah dibayar → tidak boleh dibatalkan sendiri oleh pembeli.
+      expect(paid.canCancel, isFalse);
+
+      final ready = OrderStatus.fromCode('app_ready');
+      expect(ready, OrderStatus.appReady);
+      expect(ready.isActive, isTrue);
+      expect(ready.isReady, isTrue);
+      expect(ready.canCancel, isFalse);
     });
 
     test('status yang belum dikenal tidak membuat crash', () {

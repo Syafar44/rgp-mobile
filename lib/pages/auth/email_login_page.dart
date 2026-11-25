@@ -6,6 +6,7 @@ import '../../data/auth_repository.dart';
 import '../../data/auth_store.dart';
 import '../../widgets/app_top_bar.dart';
 import 'auth_widgets.dart';
+import 'forgot_password_page.dart';
 import 'register_page.dart';
 import 'verify_email_page.dart';
 
@@ -27,6 +28,9 @@ class _EmailLoginPageState extends State<EmailLoginPage> {
   bool _obscure = true;
   bool _loading = false;
   String? _error;
+
+  /// Pesan informasi, mis. setelah kata sandi diganti lewat Lupa Kata Sandi.
+  String? _info;
 
   @override
   void initState() {
@@ -53,6 +57,7 @@ class _EmailLoginPageState extends State<EmailLoginPage> {
     setState(() {
       _loading = true;
       _error = null;
+      _info = null;
     });
     try {
       final session = await authRepository.login(
@@ -96,6 +101,24 @@ class _EmailLoginPageState extends State<EmailLoginPage> {
     }
   }
 
+  /// Lupa kata sandi. Kembali dengan email bila kata sandi sudah terganti
+  /// tetapi masuk otomatis gagal — isi untuk pengguna dan minta masuk manual.
+  Future<void> _forgot() async {
+    final email = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ForgotPasswordPage(initialEmail: _email.text),
+      ),
+    );
+    if (email == null || !mounted) return;
+    setState(() {
+      _email.text = email;
+      _password.clear();
+      _error = null;
+      _info = 'Kata sandi sudah diganti, silakan masuk.';
+    });
+  }
+
   void _register() {
     Navigator.push(
       context,
@@ -112,11 +135,12 @@ class _EmailLoginPageState extends State<EmailLoginPage> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
-            const AuthIllustration(
-              url:
-                  'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=600&q=60&auto=format&fit=crop',
-              height: 180,
-              icon: Icons.storefront,
+            // Ukuran diatur di sini: `height` tinggi kotaknya, `fit`
+            // cara mengisinya (contain = utuh, cover = penuh tapi terpotong).
+            const AuthIllustration.asset(
+              kOutletPhoto,
+              height: 240,
+              fit: BoxFit.contain,
             ),
             const SizedBox(height: 20),
             const Text(
@@ -129,6 +153,10 @@ class _EmailLoginPageState extends State<EmailLoginPage> {
               style: TextStyle(fontSize: 14, color: AppColors.grey600),
             ),
             const SizedBox(height: 20),
+            if (_info != null) ...[
+              AuthInfoBox(message: _info!),
+              const SizedBox(height: 14),
+            ],
             TextField(
               controller: _email,
               keyboardType: TextInputType.emailAddress,
@@ -174,12 +202,7 @@ class _EmailLoginPageState extends State<EmailLoginPage> {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton(
-                onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Pemulihan kata sandi belum tersedia'),
-                    duration: Duration(seconds: 1),
-                  ),
-                ),
+                onPressed: _loading ? null : _forgot,
                 child: const Text('Lupa kata sandi?'),
               ),
             ),
@@ -283,11 +306,10 @@ class _WelcomeSheet extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            const AuthIllustration(
-              url:
-                  'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=600&q=60&auto=format&fit=crop',
-              height: 180,
-              icon: Icons.bakery_dining,
+            const AuthIllustration.asset(
+              kOutletPhoto,
+              height: 200,
+              fit: BoxFit.contain,
             ),
             const SizedBox(height: 16),
             const Text(

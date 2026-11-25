@@ -4,15 +4,34 @@ import '../core/theme/app_colors.dart';
 import '../core/utils/formatter.dart';
 import '../data/cart_store.dart';
 import '../data/models/cart.dart';
+import '../data/models/order.dart';
+import '../data/order_store.dart';
 import '../pages/cart_page.dart';
 
-/// Bilah keranjang mengambang yang selalu tampil tepat di atas bottom navbar
-/// selama keranjang berisi. Menekannya membuka halaman Konfirmasi Pesanan.
+/// Bilah keranjang mengambang yang tampil tepat di atas bottom navbar selama
+/// keranjang berisi. Menekannya membuka halaman Konfirmasi Pesanan.
+///
+/// **Disembunyikan selama ada pesanan berjalan.** Aturan "satu pesanan pada
+/// satu waktu" membuat checkout ditolak selama pesanan sebelumnya belum
+/// tuntas, jadi bilah yang mengajak checkout hanya akan mengantar pembeli ke
+/// dialog penolakan. Bilah pesanan berjalan ([ActiveOrderBar]) yang berdiri
+/// di atasnya sudah memberi tahu apa yang perlu dilakukan — melunasi atau
+/// menunggu.
 class CartBar extends StatelessWidget {
   const CartBar({super.key});
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<List<Order>>(
+      valueListenable: orderStore.active,
+      builder: (context, orders, _) {
+        if (orders.isNotEmpty) return const SizedBox.shrink();
+        return _bar(context);
+      },
+    );
+  }
+
+  Widget _bar(BuildContext context) {
     return ValueListenableBuilder<ServerCart>(
       valueListenable: cartStore.cart,
       builder: (context, cart, _) {

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../core/config/app_features.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/formatter.dart';
 import '../data/dummy/dummy_data.dart';
 import '../data/models/vip.dart';
+import '../data/notifiers.dart';
+import '../widgets/soon_badge.dart';
 
 /// Halaman VIP ("Panglima VIP") — meniru halaman keanggotaan Kopi Kenangan:
 /// carousel kartu tier (Silver/Gold/Black) di atas, lalu lembar putih berisi
@@ -49,6 +52,11 @@ class _VipPageState extends State<VipPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Seluruh isi halaman ini masih data karangan — tier, poin, voucher,
+    // bahkan sapaan namanya. Sampai endpoint loyalty ada, tabnya tetap di
+    // navbar tapi isinya diganti keterangan jujur.
+    if (!AppFeatures.vip) return const _VipSegeraHadir();
+
     final tier = _tiers[_activeTier];
 
     return AnimatedContainer(
@@ -1367,4 +1375,83 @@ void _snack(BuildContext context, String msg) {
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(content: Text(msg), duration: const Duration(seconds: 1)),
   );
+}
+
+/// Isi halaman VIP selama program keanggotaan belum rilis.
+///
+/// Sengaja tidak menampilkan contoh tier atau jumlah poin: angka contoh akan
+/// terbaca sebagai milik pembeli, dan itu janji yang belum bisa ditepati.
+class _VipSegeraHadir extends StatelessWidget {
+  const _VipSegeraHadir();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppColors.creamSurface,
+      child: SafeArea(
+        bottom: false,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(32, 0, 32, 40),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 92,
+                  height: 92,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.maroon50,
+                  ),
+                  child: const Icon(
+                    Icons.workspace_premium,
+                    size: 46,
+                    color: AppColors.gold500,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                const Text(
+                  'Panglima VIP',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Program keanggotaan — kumpulkan poin tiap pembelian, '
+                  'naik tingkat, dan tukar dengan voucher.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.5,
+                    color: AppColors.grey600,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const SoonBadge(),
+                const SizedBox(height: 28),
+                FilledButton.icon(
+                  onPressed: () => selectedPageNotifier.value = 1,
+                  icon: const Icon(Icons.bakery_dining_outlined, size: 20),
+                  label: const Text('Lihat Menu'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.maroon700,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 26,
+                      vertical: 13,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

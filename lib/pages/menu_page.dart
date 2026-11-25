@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../core/network/api_error.dart';
 import '../core/theme/app_colors.dart';
+import '../core/utils/app_log.dart';
 import '../data/menu_repository.dart';
 import '../data/models/product.dart';
 import '../data/outlet_store.dart';
 import '../widgets/product_card.dart';
 import 'outlet_page.dart';
+import '../widgets/outlet_switch.dart';
 
 /// Data satu section kategori pada halaman Menu.
 typedef MenuSection = ({String title, List<Product> items});
@@ -102,11 +104,14 @@ class _MenuPageState extends State<MenuPage> {
   }
 
   /// Hanya kategori ini yang ditampilkan (urutannya juga urutan tampil).
+  /// Pencocokannya `contains`, jadi satu entri "Bakpia" sudah menampung
+  /// "Bakpia Basah" maupun "Bakpia Kering" dari server dalam satu tab.
   static const List<String> _allowedCategories = [
     'Roti Gembung',
-    'Bakpia',
     'Donat',
     'Pizza',
+    'Bakpia',
+    'Bolen',
   ];
 
   /// Tentukan kategori sebuah produk di antara [_allowedCategories].
@@ -166,10 +171,23 @@ class _MenuPageState extends State<MenuPage> {
 
   /// Scroll list ke section [i] saat tab ditekan.
   Future<void> _onTabTap(int i) async {
+    // Dicatat supaya bisa dibedakan: ketukan yang tidak sampai sama sekali
+    // (tidak ada baris ini) versus ketukan yang sampai tapi tidak meloncat.
+    AppLog.info('MENU', 'tab ditekan: ${_sections[i].title}');
     setState(() => _activeTab = i);
     _ensureTabVisible(i);
     final ctx = _sectionKeys[i].currentContext;
-    if (ctx == null) return;
+    if (ctx == null) {
+      // Seharusnya tak terjadi lagi: seluruh section kini dibangun sekaligus.
+      // Dicatat supaya kalau terulang, sebabnya terlihat — bukan cuma tab
+      // yang ditekan lalu tidak terjadi apa-apa.
+      AppLog.warn(
+        'MENU',
+        'kategori "${_sections[i].title}" belum terbangun — tab tidak meloncat',
+        detail: 'section $i dari ${_sections.length}',
+      );
+      return;
+    }
     _programmaticScroll = true;
     await Scrollable.ensureVisible(
       ctx,
@@ -253,20 +271,32 @@ class _MenuPageState extends State<MenuPage> {
           child: RefreshIndicator(
             onRefresh: _refresh,
             color: AppColors.maroon700,
-            child: ListView(
+            // SingleChildScrollView, bukan ListView: berpindah kategori
+            // bekerja dengan mencari posisi section lewat `GlobalKey`, dan
+            // kunci itu hanya punya context bila widget-nya sudah dibangun.
+            // ListView membangun seadanya sejauh `cacheExtent`, sehingga
+            // kategori terjauh tidak pernah ada — penekanan tabnya lalu
+            // berakhir tanpa efek apa pun. Di sini semuanya dibangun, jadi
+            // loncatan tab maupun penyorotan tab saat digulir selalu tepat.
+            //
+            // Biayanya wajar: tiap section memang sudah membangun seluruh
+            // itemnya sekaligus (GridView `shrinkWrap`), dan satu outlet hanya
+            // punya lima kategori.
+            child: SingleChildScrollView(
               key: _listKey,
               controller: _scroll,
               physics: const AlwaysScrollableScrollPhysics(),
-              // Bangun semua section agar tab bisa langsung loncat & sinkron.
-              cacheExtent: 3000,
               padding: const EdgeInsets.only(bottom: 24),
-              children: [
-                for (int i = 0; i < _sections.length; i++)
-                  _CategorySection(
-                    key: _sectionKeys[i],
-                    section: _sections[i],
-                  ),
-              ],
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (int i = 0; i < _sections.length; i++)
+                    _CategorySection(
+                      key: _sectionKeys[i],
+                      section: _sections[i],
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -279,7 +309,7 @@ class _MenuPageState extends State<MenuPage> {
       context,
       MaterialPageRoute(builder: (_) => const OutletPage()),
     );
-    if (selected != null) outletStore.select(selected);
+    if (selected != null && mounted) await switchOutlet(context, selected);
   }
 }
 

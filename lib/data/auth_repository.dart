@@ -8,7 +8,8 @@ import 'models/auth_session.dart';
 import 'models/register_result.dart';
 import 'models/user_profile.dart';
 
-/// Alur pendaftaran & verifikasi email (lihat `API_REGISTER_FLUTTER.md`).
+/// Alur pendaftaran, verifikasi email, dan lupa kata sandi (lihat
+/// `API_REGISTER_FLUTTER.md` & `API-Lupa-Password-Flutter.md`).
 ///
 /// Semua galat Dio diterjemahkan menjadi [ApiException] berisi pesan bahasa
 /// Indonesia yang siap ditampilkan, jadi halaman UI tidak perlu tahu soal
@@ -101,6 +102,51 @@ class AuthRepository {
     }
   }
 
+  /// `POST /customer/forgot-password` — minta kode reset ke email.
+  ///
+  /// Balasan sukses SELALU sama, terdaftar maupun tidak — pemanggil harus
+  /// tetap lanjut ke layar kode dan tidak boleh menyiratkan email itu ada.
+  Future<void> forgotPassword(String email) async {
+    _ensureConfigured();
+    try {
+      await _api.forgotPassword(email: _normalizeEmail(email));
+    } on DioException catch (e) {
+      throw _network(e) ??
+          forgotErrorFor(
+            status: e.response?.statusCode,
+            message: serverMessage(e),
+            validation: rawValidation(e),
+          );
+    }
+  }
+
+  /// `POST /customer/reset-password` — periksa kode lalu ganti kata sandi.
+  ///
+  /// [email] harus sama dengan yang dipakai di [forgotPassword]. Galatnya
+  /// selalu [ResetPasswordException], supaya layar tahu kapan kode perlu
+  /// dikosongkan atau diminta ulang.
+  Future<void> resetPassword({
+    required String email,
+    required String code,
+    required String password,
+  }) async {
+    _ensureConfigured();
+    try {
+      await _api.resetPassword(
+        email: _normalizeEmail(email),
+        code: code.trim(),
+        password: password,
+      );
+    } on DioException catch (e) {
+      throw _network(e) ??
+          resetErrorFor(
+            status: e.response?.statusCode,
+            message: serverMessage(e),
+            validation: rawValidation(e),
+          );
+    }
+  }
+
   /// `GET /me` — profil dari klaim token yang sedang dipakai.
   ///
   /// Butuh token Bearer (disisipkan `createDio`). Ingat: `/me` membaca klaim
@@ -172,9 +218,146 @@ class AuthRepository {
     }
   }
 
+  /// Reset kata sandi LALU login dengan kata sandi baru.
+  ///
+  /// Respons reset tidak berisi token, jadi login wajib menyusul. Token baru
+  /// sekaligus membawa `email_verified: true` — reset yang berhasil
+  /// membuktikan kodenya sampai ke kotak masuk pemilik.
+  ///
+  /// Mengembalikan **null** bila kata sandi sudah terganti tetapi login
+  /// otomatis gagal: pemanggil mengantar pengguna ke halaman Masuk, bukan
+  /// menampilkan galat — reset-nya sendiri sudah berhasil.
+  Future<AuthSession?> resetPasswordAndLogin({
+    required String email,
+    required String code,
+    required String password,
+  }) async {
+    await resetPassword(email: email, code: code, password: password);
+    try {
+      return await login(email: email, password: password);
+    } on ApiException {
+      return null;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // PENERJEMAHAN GALAT
   // ---------------------------------------------------------------------------
+
+  /// Galat `forgot-password` → pesan siap tampil.
+  ///
+  /// [message] adalah `message` mentah dari server — **null** bila body-nya
+  /// bukan object. Status diperiksa lebih dulu: limiter per IP membalas `429`
+  /// dengan body literal `null`. Dipublikasikan agar tabel galatnya bisa
+  /// diuji tanpa server.
+  static ApiException forgotErrorFor({
+    required int? status,
+    String? message,
+    Map<String, String> validation = const {},
+  }) {
+    switch (status) {
+      case 429:
+        // Ada pesan → batas 3 kode per jam untuk email ini. Tanpa pesan →
+        // limiter per IP, sifatnya sebentar.
+        return ApiException(
+          message == null
+              ? 'Terlalu banyak percobaan, tunggu sebentar.'
+              : 'Sudah terlalu sering meminta kode. Coba lagi 1 jam lagi.',
+          statusCode: 429,
+        );
+      case 400:
+        final friendly = _friendlyValidation(validation);
+        return ApiException(
+          friendly['email'] ?? 'Format email tidak valid.',
+          statusCode: 400,
+          validation: friendly,
+        );
+      case 503:
+        return const ApiException(
+          'Server sedang bermasalah, coba lagi sebentar lagi.',
+          statusCode: 503,
+        );
+      default:
+        return ApiException(
+          'Terjadi kesalahan, coba lagi nanti.',
+          statusCode: status,
+        );
+    }
+  }
+
+  /// Galat `reset-password` → pesan siap tampil (lihat [forgotErrorFor]).
+  static ResetPasswordException resetErrorFor({
+    required int? status,
+    String? message,
+    Map<String, String> validation = const {},
+  }) {
+    final msg = message?.toLowerCase() ?? '';
+    switch (status) {
+      case 429:
+        // Tanpa pesan → limiter per IP. Dengan pesan → 5 kali salah untuk
+        // kode yang sama: kodenya sudah dibatalkan server, bahkan kode yang
+        // benar pun tidak diterima lagi.
+        if (message == null) {
+          return const ResetPasswordException(
+            'Terlalu banyak percobaan, tunggu sebentar.',
+            statusCode: 429,
+          );
+        }
+        return const ResetPasswordException(
+          'Terlalu banyak percobaan salah. Minta kode baru.',
+          statusCode: 429,
+          mintaKodeBaru: true,
+          kosongkanKode: true,
+        );
+      case 400:
+        final friendly = _friendlyValidation(validation);
+        if (friendly.isNotEmpty) {
+          return ResetPasswordException(
+            'Periksa kembali isian Anda.',
+            statusCode: 400,
+            validation: friendly,
+          );
+        }
+        // "tidak berlaku" dicek lebih dulu: pesan kedaluwarsa tidak memuat
+        // kata "salah", tapi urutan ini menjaga bila suatu saat memuatnya.
+        // Server sengaja tidak membedakan kedaluwarsa, sudah dipakai, belum
+        // pernah diminta, dan email tidak terdaftar.
+        if (msg.contains('tidak berlaku')) {
+          return const ResetPasswordException(
+            'Kode sudah tidak berlaku. Minta kode baru.',
+            statusCode: 400,
+            mintaKodeBaru: true,
+          );
+        }
+        if (msg.contains('salah')) {
+          return const ResetPasswordException(
+            'Kode salah, coba periksa lagi.',
+            statusCode: 400,
+            validation: {'code': 'Kode salah, coba periksa lagi.'},
+          );
+        }
+        return const ResetPasswordException(
+          'Data tidak valid. Periksa kembali isian Anda.',
+          statusCode: 400,
+        );
+      case 503:
+        return const ResetPasswordException(
+          'Server sedang bermasalah, coba lagi sebentar lagi.',
+          statusCode: 503,
+        );
+      default:
+        return ResetPasswordException(
+          'Terjadi kesalahan, coba lagi nanti.',
+          statusCode: status,
+        );
+    }
+  }
+
+  /// Galat jaringan (tanpa respons server), atau null bila server menjawab.
+  static ApiException? _network(DioException e) {
+    final network = networkErrorMessage(e);
+    return network == null ? null : ApiException(network);
+  }
 
   ApiException _mapRegisterError(DioException e) {
     final network = networkErrorMessage(e);
@@ -373,6 +556,23 @@ class AuthRepository {
     if (data is Map) return data.cast<String, dynamic>();
     return const {};
   }
+}
+
+/// Galat `reset-password`, dengan petunjuk untuk layar kode.
+class ResetPasswordException extends ApiException {
+  const ResetPasswordException(
+    super.message, {
+    super.statusCode,
+    super.validation,
+    this.mintaKodeBaru = false,
+    this.kosongkanKode = false,
+  });
+
+  /// Kode yang dipegang pengguna sudah mati — sorot tombol "Kirim ulang".
+  final bool mintaKodeBaru;
+
+  /// Isi field kode tidak lagi berguna (sudah dibatalkan server).
+  final bool kosongkanKode;
 }
 
 /// Ubah map validasi mentah (`field` → nama aturan) menjadi pesan yang ramah.

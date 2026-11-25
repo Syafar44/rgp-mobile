@@ -2,7 +2,7 @@ name: roti_gembung_panglima_app
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
 
 # The following defines the version and build number for your application.
 # A version number is three numbers separated by dots, like 1.2.43
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.0.4+7
 
 environment:
   sdk: ^3.9.2
@@ -47,6 +47,17 @@ dependencies:
   # Lokasi GPS perangkat ("gunakan lokasi saat ini").
   geolocator: ^14.0.2
   shared_preferences: ^2.5.5
+  # Halaman pembayaran penyedia dibuka di dalam aplikasi, bukan browser luar.
+  webview_flutter: ^4.10.0
+  # Cadangan: membuka tautan/deeplink yang tak bisa ditangani webview
+  # (mis. skema gojek://, shopeeid://) di aplikasi yang sesuai.
+  url_launcher: ^6.3.1
+  # Menggambar QRIS langsung di dalam aplikasi (Dart murni, tanpa kode native).
+  qr_flutter: ^4.1.0
+  # Push notification (OneSignal) — App ID dibaca dari `.env`.
+  onesignal_flutter: ^5.7.0
+  in_app_update: ^4.2.5
+  package_info_plus: ^9.0.1
 
 dev_dependencies:
   flutter_test:
@@ -58,13 +69,39 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
+  # Pembangkit ikon aplikasi dari `assets/logo/` (lihat blok
+  # `flutter_launcher_icons` di bawah).
+  flutter_launcher_icons: ^0.14.4
+
+# Ikon aplikasi. Jalankan ulang setelah logonya diganti:
+#     dart run flutter_launcher_icons
+#
+# Berkas hasilnya (mipmap Android & AppIcon iOS) ikut di-commit, jadi build
+# biasa tidak perlu menjalankan perintah ini lagi.
+flutter_launcher_icons:
+  # Ikon persegi biasa — dipakai Android lawas (< API 26) dan iOS.
+  image_path: "assets/logo/logo.png"
+
+  android: true
+  # Android 8+ memakai adaptive icon: lapisan depan dipotong mask (bulat,
+  # squircle, dsb.). Generator ini sudah menyisipkan inset 16% sendiri pada
+  # `mipmap-anydpi-v26/ic_launcher.xml`, dan margin bawaan logo sudah menjaga
+  # lencananya tetap di dalam zona aman — jadi logonya dipakai apa adanya.
+  # Memberi padding tambahan di sini justru membuat ikonnya kekecilan.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/logo/logo.png"
+  # Sesuai `minSdk` di android/app/build.gradle.kts.
+  min_sdk_android: 24
+
+  ios: true
+  # iOS menolak ikon bertransparansi; sudutnya dibulatkan sistem.
+  remove_alpha_ios: true
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
 # The following section is specific to Flutter packages.
 flutter:
-
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
@@ -73,6 +110,9 @@ flutter:
   # `.env` dimuat lewat rootBundle, jadi wajib terdaftar sebagai aset.
   assets:
     - .env
+    # Seluruh isi folder didaftarkan sekaligus agar menambah gambar baru tidak
+    # perlu menyentuh berkas ini lagi.
+    - assets/img/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -1,0 +1,24 @@
+# Contoh isi key.properties — salin file ini menjadi `key.properties`
+# (di folder yang sama) lalu isi sesuai keystore Anda.
+#
+# JANGAN menulis kata sandi asli di berkas contoh ini: `key.properties.example`
+# IKUT masuk repo, sedangkan `key.properties` tidak. Salah tempat berarti
+# kredensial rilis tersebar ke semua orang yang bisa membaca repo.
+#
+# CADANGKAN keystore-nya di tempat aman. Kalau hilang, upload key bisa diganti
+# lewat Play Console (karena Play App Signing aktif untuk aplikasi baru), tapi
+# prosesnya merepotkan.
+
+# Path ke berkas keystore. Boleh absolut, atau relatif terhadap folder
+# `android/app/`. Pakai garis miring biasa `/` — berkas ini dibaca sebagai
+# properti Java, dan `\` di situ berarti karakter escape.
+storeFile=C:/path/ke/panglima-upload.jks
+
+# Kata sandi keystore.
+storePassword=
+
+# Nama alias kunci di dalam keystore (sesuai `-alias` saat membuatnya).
+keyAlias=panglima
+
+# Kata sandi alias. Biasanya sama dengan storePassword.
+keyPassword=

@@ -5,6 +5,20 @@
 class Fees {
   Fees._();
 
+  /// Nilai belanja terkecil yang boleh dibayarkan. **0 = tanpa batas.**
+  ///
+  /// Diperiksa terhadap **isi keranjang**, sebelum biaya admin — biaya admin
+  /// bergantung metode pembayaran yang belum dipilih pada tahap itu, jadi
+  /// tidak bisa ikut dihitung.
+  ///
+  /// Batas Rp 50.000 dimatikan atas permintaan. Seluruh tampilannya tetap ada
+  /// dan menyesuaikan nilai ini sendiri — isikan nominalnya lagi untuk
+  /// menghidupkan kembali, tanpa menyentuh berkas lain.
+  static const int minimumBelanja = 0;
+
+  /// True bila batas minimum sedang berlaku.
+  static bool get minimumBerlaku => minimumBelanja > 0;
+
   /// Ongkir Instant Delivery (flat, dummy).
   static const int instantDelivery = 10500;
 

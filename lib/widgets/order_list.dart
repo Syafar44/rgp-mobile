@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../core/network/api_error.dart';
+import '../core/push/push_service.dart';
 import '../core/theme/app_colors.dart';
 import '../data/models/order.dart';
-import '../pages/order_detail_page.dart';
+import '../pages/order_status_page.dart';
+import '../pages/payment_page.dart';
 import 'order_card.dart';
 
 /// Pemuat sehalaman pesanan (mis. `orderRepository.active`).
@@ -46,6 +48,15 @@ class _OrderListViewState extends State<OrderListView> {
   void initState() {
     super.initState();
     _refresh();
+    // Push status pesanan yang tiba saat daftar ini terbuka membuat isinya
+    // basi — muat ulang, jangan biarkan pembeli melihat status lama.
+    pushService.lastForeground.addListener(_refresh);
+  }
+
+  @override
+  void dispose() {
+    pushService.lastForeground.removeListener(_refresh);
+    super.dispose();
   }
 
   Future<void> _refresh() async {
@@ -94,11 +105,21 @@ class _OrderListViewState extends State<OrderListView> {
     }
   }
 
-  /// Buka detail; muat ulang daftar bila pesanan berubah di sana (dibatalkan).
+  /// Buka pesanan; muat ulang daftar bila keadaannya berubah di sana.
+  ///
+  /// Pesanan yang belum lunas diarahkan ke halaman **pembayaran**, bukan
+  /// halaman status: pesanan POS-nya belum terbentuk sehingga belum ada id
+  /// numerik, dan yang dibutuhkan pembeli memang melunasinya.
   Future<void> _openDetail(Order order) async {
+    if (order.isAwaitingPayment) {
+      if (await openResumePayment(context, order) && mounted) await _refresh();
+      return;
+    }
     final changed = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => OrderDetailPage(orderId: order.id)),
+      MaterialPageRoute(
+        builder: (_) => OrderStatusPage(orderId: order.id, initialOrder: order),
+      ),
     );
     if (changed == true) await _refresh();
   }

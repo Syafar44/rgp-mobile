@@ -8,21 +8,36 @@ import 'models/product.dart';
 
 /// Mengambil menu sebuah outlet dari API dan memetakannya ke [Product].
 ///
-/// **Pemetaan field masih perkiraan** (respons `/outlets/:id/menus` belum
-/// terdokumentasi). Parser di bawah sengaja toleran: mencoba beberapa nama
-/// field yang lazim (snake_case + variasi Indonesia) dan mendukung dua bentuk
-/// respons: daftar item rata, atau dikelompokkan per kategori. Setelah bentuk
-/// respons asli diketahui, cukup rapikan daftar kunci di [_product].
+/// Bentuk respons resmi (dokumen API Aplikasi Customer bagian 2) adalah daftar
+/// kategori — `{category_id, category, data: [menu...]}` — dengan tiap menu
+/// membawa `id`, `code`, `title`, `menu_type`, `price`, `image_url`, plus
+/// `max_qty` & `props` khusus paket. Parser tetap toleran terhadap nama field
+/// lain agar aman bila server menambah variasi.
+///
+/// Catatan dari dokumen: server mengirim **seluruh** menu outlet dan tidak
+/// menyaring mana yang layak dipesan online — penyaringan lewat
+/// [excludeCategoryIds] adalah tanggung jawab aplikasi.
 class MenuRepository {
   MenuRepository(this._api);
 
   final MenuApi _api;
 
-  Future<List<Product>> outletMenus(int outletId) async {
+  /// Ambil menu outlet.
+  ///
+  /// [excludeCategoryIds] membuang kategori yang tidak layak dipesan online
+  /// (mis. es krim). Kosong = tampilkan semua, yang tepat untuk pickup.
+  Future<List<Product>> outletMenus(
+    int outletId, {
+    Set<int> excludeCategoryIds = const {},
+  }) async {
     _ensureConfigured();
     try {
       final res = await _api.outletMenus(outletId);
-      return _parse(res.data);
+      final all = parseMenus(res.data);
+      if (excludeCategoryIds.isEmpty) return all;
+      return all
+          .where((p) => !excludeCategoryIds.contains(p.categoryId))
+          .toList();
     } on DioException catch (e) {
       throw _mapError(e);
     }
@@ -30,7 +45,10 @@ class MenuRepository {
 
   // --- Parsing ---------------------------------------------------------------
 
-  List<Product> _parse(Object? body) {
+  /// Petakan body respons menu menjadi daftar [Product].
+  ///
+  /// Dipublikasikan agar bentuk respons resmi bisa diuji tanpa jaringan.
+  List<Product> parseMenus(Object? body) {
     final products = <Product>[];
     for (final e in _extractList(body)) {
       if (e is! Map) continue;
@@ -41,10 +59,15 @@ class MenuRepository {
       if (sub is List) {
         final cat =
             _str(m, ['category', 'category_name', 'name', 'kategori']) ?? 'Menu';
+        final catId = _num(m, ['category_id', 'categoryId'])?.toInt();
         for (final it in sub) {
           if (it is Map) {
             products.add(
-              _product(it.cast<String, dynamic>(), fallbackCategory: cat),
+              _product(
+                it.cast<String, dynamic>(),
+                fallbackCategory: cat,
+                fallbackCategoryId: catId,
+              ),
             );
           }
         }
@@ -69,20 +92,37 @@ class MenuRepository {
     return const [];
   }
 
-  Product _product(Map<String, dynamic> j, {String? fallbackCategory}) {
+  Product _product(
+    Map<String, dynamic> j, {
+    String? fallbackCategory,
+    int? fallbackCategoryId,
+  }) {
     final price =
         _num(j, ['price', 'sell_price', 'sale_price', 'harga', 'base_price'])
             ?.toInt() ??
         0;
     final promo = _num(j, ['promo_price', 'discount_price', 'harga_promo']);
+    // `props` hanya ada untuk menu paket: daftar varian yang bisa dipilih.
+    final rawProps = j['props'];
     return Product(
       id: (j['id'] ?? j['menu_id'] ?? j['product_id'] ?? '').toString(),
       name: _str(j, ['title', 'name', 'menu_name', 'product_name', 'nama']) ??
           '',
+      code: _str(j, ['code', 'menu_code']) ?? '',
       category:
           _str(j, ['category', 'category_name', 'kategori', 'category_label']) ??
           fallbackCategory ??
           'Menu',
+      categoryId:
+          _num(j, ['category_id', 'categoryId'])?.toInt() ?? fallbackCategoryId,
+      menuType: _str(j, ['menu_type', 'menuType', 'type']) ?? 'regular',
+      maxQty: _num(j, ['max_qty', 'maxQty'])?.toInt() ?? 0,
+      variants: rawProps is List
+          ? rawProps
+                .whereType<Map>()
+                .map((e) => MenuVariant.fromJson(e.cast<String, dynamic>()))
+                .toList(growable: false)
+          : const [],
       price: price,
       promoPrice: (promo != null && promo > 0 && promo < price)
           ? promo.toInt()

@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../core/network/api_error.dart';
 import '../../core/theme/app_colors.dart';
@@ -62,7 +61,7 @@ class _VerifyEmailPageState extends State<VerifyEmailPage> {
     super.dispose();
   }
 
-  bool get _codeOk => RegExp(r'^\d{6}$').hasMatch(_code.text.trim());
+  bool get _codeOk => AuthCodeField.isValid(_code.text);
 
   void _startCooldown() {
     _timer?.cancel();
@@ -159,11 +158,13 @@ class _VerifyEmailPageState extends State<VerifyEmailPage> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           children: [
-            const AuthIllustration(
-              url:
-                  'https://images.unsplash.com/photo-1526628953301-3e589a6a8b74?w=600&q=60&auto=format&fit=crop',
-              height: 160,
-              icon: Icons.mark_email_unread_outlined,
+            // Foto outlet dari dalam aplikasi, sama dengan halaman masuk &
+            // daftar. Sebelumnya foto acak dari Unsplash: butuh jaringan,
+            // dan tidak ada hubungannya dengan Panglima.
+            const AuthIllustration.asset(
+              kOutletPhoto,
+              height: 200,
+              fit: BoxFit.contain,
             ),
             const SizedBox(height: 20),
             const Text(
@@ -190,28 +191,13 @@ class _VerifyEmailPageState extends State<VerifyEmailPage> {
             const SizedBox(height: 20),
             AuthErrorBox(message: _error),
             if (_info != null) ...[
-              _InfoBox(message: _info!),
+              AuthInfoBox(message: _info!),
               const SizedBox(height: 14),
             ],
-            TextField(
+            AuthCodeField(
               controller: _code,
-              keyboardType: TextInputType.number,
-              textAlign: TextAlign.center,
+              label: 'Kode Verifikasi',
               autofocus: true,
-              maxLength: 6,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(6),
-              ],
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 12,
-              ),
-              decoration: authInputDecoration(
-                label: 'Kode Verifikasi',
-                hint: '000000',
-              ).copyWith(counterText: ''),
             ),
             const SizedBox(height: 20),
             SizedBox(
@@ -272,37 +258,6 @@ class _VerifyEmailPageState extends State<VerifyEmailPage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// Kotak pesan informasi (bukan galat) — mis. konfirmasi kirim ulang kode.
-class _InfoBox extends StatelessWidget {
-  const _InfoBox({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.maroon50,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.info_outline, color: AppColors.maroon700, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              message,
-              style: const TextStyle(color: AppColors.maroon700, fontSize: 13),
-            ),
-          ),
-        ],
       ),
     );
   }

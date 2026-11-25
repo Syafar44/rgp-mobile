@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/theme/app_colors.dart';
+import 'auth_widgets.dart';
 import 'email_login_page.dart';
 
 /// Gerbang saat BELUM masuk — onboarding gambar full layar (3 slide) dengan
@@ -19,24 +20,21 @@ class _LoginLandingPageState extends State<LoginLandingPage> {
 
   static const List<({String image, String title, String subtitle})> _slides = [
     (
-      image:
-          'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=900&q=70&auto=format&fit=crop',
+      image: kSlide1Photo,
       title: 'Selamat datang di Roti Gembung Panglima!',
       subtitle:
           'Nikmati roti gembung & kopi fresh berkualitas tinggi lewat satu '
           'aplikasi.',
     ),
     (
-      image:
-          'https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=900&q=70&auto=format&fit=crop',
+      image: kSlide2Photo,
       title: 'Selalu Fresh Setiap Hari',
       subtitle:
           'Dibuat dari bahan pilihan, Roti Gembung Panglima selalu fresh dan '
           'menggugah selera.',
     ),
     (
-      image:
-          'https://images.unsplash.com/photo-1521017432531-fbd92d768814?w=900&q=70&auto=format&fit=crop',
+      image: kSlide3Photo,
       title: 'Siap Melayani Panglima People',
       subtitle:
           'Antar ke alamatmu atau ambil di outlet terdekat, kami siap '
@@ -126,13 +124,12 @@ class _Slide extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Gambar full layar (fallback maroon bila jaringan gagal).
-        Image.network(
+        // Gambar full layar dari aset aplikasi — tidak butuh jaringan, jadi
+        // onboarding tetap utuh saat dibuka pertama kali tanpa sinyal.
+        // `cover` memenuhi layar; sisi yang berlebih terpotong.
+        Image.asset(
           slide.image,
           fit: BoxFit.cover,
-          loadingBuilder: (context, child, progress) => progress == null
-              ? child
-              : Container(color: AppColors.maroon700),
           errorBuilder: (context, error, stack) =>
               Container(color: AppColors.maroon700),
         ),

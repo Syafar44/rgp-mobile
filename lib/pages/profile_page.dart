@@ -1,13 +1,26 @@
 import 'package:flutter/material.dart';
 
+import '../core/config/app_features.dart';
 import '../core/network/api_error.dart';
 import '../core/theme/app_colors.dart';
+import '../widgets/soon_badge.dart';
 import '../data/auth_repository.dart';
 import '../data/auth_store.dart';
 import '../data/dummy/dummy_data.dart';
 import '../data/models/user_account.dart';
-import '../data/models/user_profile.dart';
+import '../data/order_store.dart';
+import '../data/customer_repository.dart';
+import '../data/models/customer_profile.dart';
 import 'address_page.dart';
+import '../core/utils/app_log.dart';
+import '../core/utils/app_version.dart';
+import 'change_password_page.dart';
+import 'debug_log_page.dart';
+import 'delete_account_page.dart';
+import 'edit_profile_page.dart';
+import 'item_swap_debug_page.dart';
+import 'orders_page.dart';
+import 'push_debug_page.dart';
 import 'auth/email_login_page.dart';
 
 /// Halaman Profile ("Saya") — meniru tata letak Kopi Kenangan:
@@ -22,8 +35,9 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   bool _biometric = true;
 
-  /// Profil dari `GET /me`. Null selama belum termuat / gagal dimuat.
-  UserProfile? _profile;
+  /// Profil customer dari `GET /customer/me` — sumber nomor HP & alamat,
+  /// yang sengaja dipisahkan server dari `/me`.
+  CustomerProfile? _customer;
   String? _profileError;
   bool _loadingProfile = false;
 
@@ -44,7 +58,17 @@ class _ProfilePageState extends State<ProfilePage> {
       final profile = await authRepository.getMe();
       await authStore.applyProfile(profile);
       if (!mounted) return;
-      setState(() => _profile = profile);
+
+      // Nomor HP & alamat hanya ada di grup /customer. Kegagalannya tidak
+      // menggagalkan halaman: /me sudah cukup untuk header.
+      try {
+        final customer = await customerRepository.me();
+        if (!mounted || customer == null) return;
+        await authStore.applyCustomer(customer);
+        if (mounted) setState(() => _customer = customer);
+      } catch (_) {
+        // Abaikan — profil dasar tetap tampil.
+      }
     } on ApiException catch (e) {
       if (!mounted) return;
       // Token kedaluwarsa/tidak sah → keluarkan pengguna, bukan sekadar pesan.
@@ -60,6 +84,50 @@ class _ProfilePageState extends State<ProfilePage> {
     } finally {
       if (mounted) setState(() => _loadingProfile = false);
     }
+  }
+
+  /// Buka form ubah profil; muat ulang bila ada perubahan tersimpan.
+  Future<void> _openEditProfile() async {
+    final updated = await Navigator.push<CustomerProfile>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditProfilePage(initial: _customer),
+      ),
+    );
+    if (updated != null && mounted) setState(() => _customer = updated);
+  }
+
+  /// Konfirmasi sebelum keluar.
+  ///
+  /// Tombolnya berdampingan dengan menu lain dan mudah tersenggol; keluar
+  /// berarti harus mengetik email & kata sandi lagi untuk kembali masuk.
+  Future<void> _confirmLogout() async {
+    final keluar = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Keluar dari akun?'),
+        content: const Text(
+          'Anda perlu masuk lagi dengan email dan kata sandi untuk memesan.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Batal', style: TextStyle(color: AppColors.grey600)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            child: const Text('Keluar'),
+          ),
+        ],
+      ),
+    );
+    if (keluar != true || !mounted) return;
+
+    authStore.logout();
+    orderStore.clear();
+    if (mounted) _snack(context, 'Kamu telah keluar');
   }
 
   /// Tarik-untuk-refresh: muat ulang profil dari server.
@@ -97,19 +165,22 @@ class _ProfilePageState extends State<ProfilePage> {
             _MenuTile(
               icon: Icons.help_outline,
               label: 'Bantuan',
+              locked: !AppFeatures.bantuan,
               onTap: () => _snack(context, 'Bantuan'),
             ),
           ],
         ),
         const SizedBox(height: 16),
-        Padding(
-          padding: const EdgeInsets.only(right: 16),
-          child: Text(
-            'V1.1.0',
-            textAlign: TextAlign.right,
-            style: TextStyle(fontSize: 12, color: AppColors.grey400),
+        // Dibaca dari pubspec saat build — jangan ditulis tangan lagi.
+        if (AppVersion.label.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Text(
+              'Versi Aplikasi ${AppVersion.label}',
+              textAlign: TextAlign.right,
+              style: TextStyle(fontSize: 12, color: AppColors.grey400),
+            ),
           ),
-        ),
         const SizedBox(height: 24),
       ],
     );
@@ -130,49 +201,76 @@ class _ProfilePageState extends State<ProfilePage> {
         _ProfileHeader(
           name: user.name,
           email: user.email,
-          roles: _profile?.roles ?? '',
           emailVerified: user.emailVerified,
           error: _profileError,
           loading: _loadingProfile,
           onRetry: _loadProfile,
+          onEdit: _openEditProfile,
         ),
         const SizedBox(height: 16),
-        const _DailyCheckIn(),
-        const SizedBox(height: 20),
+        if (AppFeatures.dailyCheckIn) ...[
+          const _DailyCheckIn(),
+          const SizedBox(height: 20),
+        ],
         _SectionTitle('Akun'),
         _MenuCard(
           children: [
-            _MenuTile(
-              icon: Icons.inbox_outlined,
-              label: 'Kotak Masuk',
-              onTap: () => _snack(context, 'Kotak Masuk'),
-            ),
+            if (AppFeatures.kotakMasuk)
+              _MenuTile(
+                icon: Icons.inbox_outlined,
+                label: 'Kotak Masuk',
+                onTap: () => _snack(context, 'Kotak Masuk'),
+              ),
+            // Dikunci, bukan disembunyikan: alamat menyusul fitur pengantaran
+            // yang memang direncanakan. Sekarang hanya tersimpan di HP.
             _MenuTile(
               icon: Icons.location_on_outlined,
               label: 'Alamat Pengiriman',
+              locked: !AppFeatures.alamatTersimpan,
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const AddressPage()),
               ),
             ),
+            if (AppFeatures.scanMerchandise)
+              _MenuTile(
+                icon: Icons.qr_code_scanner,
+                label: 'Scan Merchandise',
+                onTap: () => _snack(context, 'Scan Merchandise'),
+              ),
+            if (AppFeatures.biometrik)
+              _MenuTile(
+                icon: Icons.fingerprint,
+                label: 'Aktifkan Biometric ID',
+                trailing: Switch(
+                  value: _biometric,
+                  onChanged: (v) => setState(() => _biometric = v),
+                ),
+              ),
             _MenuTile(
-              icon: Icons.qr_code_scanner,
-              label: 'Scan Merchandise',
-              onTap: () => _snack(context, 'Scan Merchandise'),
-            ),
-            _MenuTile(
-              icon: Icons.fingerprint,
-              label: 'Aktifkan Biometric ID',
-              trailing: Switch(
-                value: _biometric,
-                onChanged: (v) => setState(() => _biometric = v),
+              icon: Icons.lock_outline,
+              label: 'Ubah Kata Sandi',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ChangePasswordPage()),
               ),
             ),
+            // Wajib ada di dalam aplikasi menurut kebijakan Google Play untuk
+            // aplikasi yang bisa membuat akun.
             _MenuTile(
-              icon: Icons.language,
-              label: 'Ubah Bahasa Aplikasi',
-              onTap: () => _snack(context, 'Ubah Bahasa'),
+              icon: Icons.person_remove_outlined,
+              label: 'Hapus Akun',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DeleteAccountPage()),
+              ),
             ),
+            if (AppFeatures.ubahBahasa)
+              _MenuTile(
+                icon: Icons.language,
+                label: 'Ubah Bahasa Aplikasi',
+                onTap: () => _snack(context, 'Ubah Bahasa'),
+              ),
           ],
         ),
         const SizedBox(height: 20),
@@ -181,20 +279,25 @@ class _ProfilePageState extends State<ProfilePage> {
           children: [
             _MenuTile(
               icon: Icons.receipt_long_outlined,
-              label: 'Riwayat Pesanan',
-              onTap: () => _snack(context, 'Riwayat Pesanan'),
+              label: 'Pesanan Saya',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const OrdersPage()),
+              ),
             ),
-            _MenuTile(
-              icon: Icons.credit_card_outlined,
-              label: 'Metode Pembayaran',
-              onTap: () => _snack(context, 'Metode Pembayaran'),
-            ),
-            _MenuTile(
-              icon: Icons.shopping_bag_outlined,
-              label: 'Pesanan Jumlah Besar',
-              badge: 'Baru',
-              onTap: () => _snack(context, 'Pesanan Jumlah Besar'),
-            ),
+            if (AppFeatures.metodePembayaranTersimpan)
+              _MenuTile(
+                icon: Icons.credit_card_outlined,
+                label: 'Metode Pembayaran',
+                onTap: () => _snack(context, 'Metode Pembayaran'),
+              ),
+            if (AppFeatures.pesananJumlahBesar)
+              _MenuTile(
+                icon: Icons.shopping_bag_outlined,
+                label: 'Pesanan Jumlah Besar',
+                badge: 'Baru',
+                onTap: () => _snack(context, 'Pesanan Jumlah Besar'),
+              ),
           ],
         ),
         const SizedBox(height: 20),
@@ -204,31 +307,66 @@ class _ProfilePageState extends State<ProfilePage> {
             _MenuTile(
               icon: Icons.help_outline,
               label: 'Bantuan',
+              locked: !AppFeatures.bantuan,
               onTap: () => _snack(context, 'Bantuan'),
             ),
             _MenuTile(
               icon: Icons.menu_book_outlined,
               label: 'Kebijakan Privasi',
+              locked: !AppFeatures.kebijakanPrivasi,
               onTap: () => _snack(context, 'Kebijakan Privasi'),
             ),
             _MenuTile(
               icon: Icons.info_outline,
               label: 'Ketentuan Layanan',
+              locked: !AppFeatures.ketentuanLayanan,
               onTap: () => _snack(context, 'Ketentuan Layanan'),
             ),
             _MenuTile(
               icon: Icons.mail_outline,
               label: 'Lapor Masalah',
+              locked: !AppFeatures.laporMasalah,
               onTap: () => _snack(context, 'Lapor Masalah'),
             ),
             _MenuTile(
               icon: Icons.chat_outlined,
               label: 'Layanan WhatsApp',
+              locked: !AppFeatures.layananWhatsapp,
               onTap: () => _snack(context, 'Layanan WhatsApp'),
             ),
+            // Hanya pada build debug — tidak ikut terbawa ke rilis.
+            if (AppLog.enabled) ...[
+              _MenuTile(
+                icon: Icons.bug_report_outlined,
+                label: 'Log Aplikasi (debug)',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const DebugLogPage()),
+                ),
+              ),
+              _MenuTile(
+                icon: Icons.notifications_none,
+                label: 'Diagnosa Push (debug)',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const PushDebugPage()),
+                ),
+              ),
+              // TODO(ganti-item): hapus gate saat modul dirilis
+              if (kFiturGantiItem)
+                _MenuTile(
+                  icon: Icons.remove_shopping_cart_outlined,
+                  label: 'Simulasi Item Habis (debug)',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ItemSwapDebugPage()),
+                  ),
+                ),
+            ],
             _MenuTile(
               icon: Icons.favorite_border,
               label: 'Tentang Aplikasi',
+              locked: !AppFeatures.tentangAplikasi,
               onTap: () => _snack(context, 'Tentang Aplikasi'),
             ),
           ],
@@ -236,10 +374,7 @@ class _ProfilePageState extends State<ProfilePage> {
         const SizedBox(height: 20),
         Center(
           child: TextButton.icon(
-            onPressed: () {
-              authStore.logout();
-              _snack(context, 'Kamu telah keluar');
-            },
+            onPressed: _confirmLogout,
             icon: const Icon(Icons.logout, color: AppColors.error, size: 18),
             label: const Text(
               'Keluar',
@@ -248,12 +383,13 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
         ),
         const SizedBox(height: 4),
-        Center(
-          child: Text(
-            'Versi Aplikasi 1.0.0',
-            style: TextStyle(fontSize: 12, color: AppColors.grey400),
+        if (AppVersion.label.isNotEmpty)
+          Center(
+            child: Text(
+              'Versi Aplikasi ${AppVersion.label}',
+              style: TextStyle(fontSize: 12, color: AppColors.grey400),
+            ),
           ),
-        ),
         const SizedBox(height: 24),
       ],
     );
@@ -268,23 +404,21 @@ class _ProfileHeader extends StatelessWidget {
   const _ProfileHeader({
     required this.name,
     required this.email,
-    required this.roles,
     required this.emailVerified,
     required this.loading,
     required this.onRetry,
+    required this.onEdit,
     this.error,
   });
 
   final String name;
   final String email;
-
-  /// Peran dari `GET /me` (mis. "Customer - End User"). Kosong bila `/me`
-  /// belum termuat.
-  final String roles;
-
   final bool emailVerified;
   final bool loading;
   final VoidCallback onRetry;
+
+  /// Membuka form ubah profil.
+  final VoidCallback onEdit;
 
   /// Pesan galat pemuatan profil. Null bila tidak ada masalah.
   final String? error;
@@ -357,16 +491,8 @@ class _ProfileHeader extends StatelessWidget {
                           color: AppColors.grey600,
                         ),
                       ),
-                    if (roles.isNotEmpty)
-                      Text(
-                        roles,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: AppColors.grey400,
-                        ),
-                      ),
+                    // Peran/divisi dari `GET /me` sengaja tidak ditampilkan —
+                    // tidak berarti apa-apa bagi pembeli.
                   ],
                 ),
               ),
@@ -386,7 +512,7 @@ class _ProfileHeader extends StatelessWidget {
                 )
               else
                 TextButton.icon(
-                  onPressed: () => _snack(context, 'Edit Profil'),
+                  onPressed: onEdit,
                   icon: Icon(
                     Icons.edit_outlined,
                     size: 14,
@@ -578,12 +704,19 @@ class _StatsCard extends StatelessWidget {
       child: IntrinsicHeight(
         child: Row(
           children: [
+            // Selama endpoint loyalty belum ada, nilainya berbunyi "Segera
+            // hadir" — BUKAN angka contoh. Menampilkan "Gold 10%" atau
+            // "600 pts" kepada pembeli yang tidak memilikinya adalah
+            // kebohongan, sekecil apa pun kelihatannya.
             Expanded(
               child: _StatBlock(
                 label: 'VIP',
                 icon: Icons.workspace_premium,
                 iconColor: AppColors.gold500,
-                value: '${DummyData.loyaltyTier} ${DummyData.loyaltyPercent}%',
+                value: AppFeatures.loyalty
+                    ? '${DummyData.loyaltyTier} ${DummyData.loyaltyPercent}%'
+                    : AppFeatures.segeraHadir,
+                muted: !AppFeatures.loyalty,
               ),
             ),
             const VerticalDivider(width: 16),
@@ -592,7 +725,10 @@ class _StatsCard extends StatelessWidget {
                 label: 'Panglima Points',
                 icon: Icons.stars_rounded,
                 iconColor: AppColors.gold500,
-                value: '${DummyData.poin} pts',
+                value: AppFeatures.loyalty
+                    ? '${DummyData.poin} pts'
+                    : AppFeatures.segeraHadir,
+                muted: !AppFeatures.loyalty,
               ),
             ),
           ],
@@ -608,12 +744,17 @@ class _StatBlock extends StatelessWidget {
     required this.icon,
     required this.iconColor,
     required this.value,
+    this.muted = false,
   });
 
   final String label;
   final IconData icon;
   final Color iconColor;
   final String value;
+
+  /// Nilainya bukan angka sungguhan (fitur belum rilis) — tampil redup agar
+  /// tidak terbaca seperti data pembeli.
+  final bool muted;
 
   @override
   Widget build(BuildContext context) {
@@ -630,16 +771,21 @@ class _StatBlock extends StatelessWidget {
         const SizedBox(height: 4),
         Row(
           children: [
-            Icon(icon, size: 18, color: iconColor),
+            Icon(
+              icon,
+              size: 18,
+              color: muted ? AppColors.grey400 : iconColor,
+            ),
             const SizedBox(width: 4),
             Flexible(
               child: Text(
                 value,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
+                style: TextStyle(
+                  fontSize: muted ? 11.5 : 13,
+                  fontWeight: muted ? FontWeight.w600 : FontWeight.bold,
+                  color: muted ? AppColors.grey600 : null,
                 ),
               ),
             ),
@@ -832,6 +978,7 @@ class _MenuTile extends StatelessWidget {
     this.onTap,
     this.trailing,
     this.badge,
+    this.locked = false,
   });
 
   final IconData icon;
@@ -844,13 +991,30 @@ class _MenuTile extends StatelessWidget {
   /// Badge kecil (mis. "Baru").
   final String? badge;
 
+  /// Fitur belum rilis: baris tetap terlihat tapi tidak bisa ditekan, dan
+  /// chevron-nya diganti label "Segera hadir". Lebih jujur daripada tombol
+  /// yang ditekan lalu tidak terjadi apa-apa.
+  final bool locked;
+
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      onTap: onTap,
-      leading: Icon(icon, color: AppColors.grey600),
-      title: Text(label, style: const TextStyle(fontSize: 15)),
-      trailing: trailing ?? _defaultTrailing(context),
+      onTap: locked ? null : onTap,
+      enabled: !locked,
+      leading: Icon(
+        icon,
+        color: locked ? AppColors.grey400 : AppColors.grey600,
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          fontSize: 15,
+          color: locked ? AppColors.grey400 : null,
+        ),
+      ),
+      trailing: locked
+          ? const SoonBadge()
+          : trailing ?? _defaultTrailing(context),
     );
   }
 

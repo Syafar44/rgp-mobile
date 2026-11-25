@@ -1,33 +1,18 @@
 /// Banner promo untuk carousel di Beranda.
 ///
-/// Tampil sebagai foto (dummy dari sumber gambar gratis) dengan overlay
-/// gradien gelap agar teks tetap terbaca, mengikuti gaya banner promo
-/// aplikasi kopi/bakery pada umumnya.
+/// Banner dibuat sebagai **gambar jadi** — judul, penawaran, dan kontak sudah
+/// menyatu di dalam desainnya. Karena itu aplikasi hanya menampilkan
+/// gambarnya utuh, tanpa menimpakan teks apa pun yang akan bertabrakan.
 class PromoBanner {
-  const PromoBanner({
-    required this.label,
-    required this.title,
-    required this.highlight,
-    required this.subtitle,
-    required this.imageUrl,
-    this.badges = const [],
-  });
+  const PromoBanner({required this.image, this.label = ''});
 
-  /// Label kecil di atas (mis. "SETIAP HARI").
+  /// Gambar banner: path aset lokal atau URL (bila nanti dari server).
+  final String image;
+
+  /// Keterangan singkat isi banner — tidak ditampilkan, dipakai pembaca layar.
   final String label;
 
-  /// Judul (mis. "Diskon Spesial").
-  final String title;
-
-  /// Angka besar penarik perhatian (mis. "hingga 30%").
-  final String highlight;
-
-  /// Penjelasan singkat di bawah [highlight].
-  final String subtitle;
-
-  /// Foto latar banner.
-  final String imageUrl;
-
-  /// Badge kecil tambahan (mis. "Disc 20% Semua Menu").
-  final List<String> badges;
+  /// True bila [image] harus diambil dari jaringan.
+  bool get isNetwork =>
+      image.startsWith('http://') || image.startsWith('https://');
 }

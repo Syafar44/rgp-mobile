@@ -47,3 +47,9 @@ app.*.map.json
 # Environment / secrets (JANGAN pernah di-commit).
 # `.env.example` tetap di-commit sebagai contoh isian.
 .env
+
+# Penandatanganan rilis Android (JANGAN pernah di-commit).
+# `key.properties.example` tetap di-commit sebagai contoh isian.
+android/key.properties
+*.jks
+*.keystore

@@ -1,4 +1,4 @@
-/// Satu item menu / produk roti.
+/// Satu item menu / produk roti (`GET /pos/app/v1/outlets/:id/menus`).
 class Product {
   const Product({
     required this.id,
@@ -12,6 +12,11 @@ class Product {
     this.isNew = false,
     this.badge,
     this.imageUrl,
+    this.code = '',
+    this.categoryId,
+    this.menuType = 'regular',
+    this.maxQty = 0,
+    this.variants = const [],
   });
 
   final String id;
@@ -19,6 +24,26 @@ class Product {
 
   /// Kategori: mis. "Roti Gembung", "Minuman", "Makanan", "Paket".
   final String category;
+
+  /// Kode menu dari server, mis. `RM-001`.
+  final String code;
+
+  /// Id kategori — dipakai untuk menyaring menu yang tidak layak dipesan
+  /// online (server sengaja mengirim seluruh menu outlet).
+  final int? categoryId;
+
+  /// `regular` atau `package`.
+  final String menuType;
+
+  /// Hanya untuk paket: total varian yang harus dipilih per satu paket.
+  final int maxQty;
+
+  /// Hanya untuk paket: pilihan varian yang tersedia.
+  final List<MenuVariant> variants;
+
+  /// True bila menu ini paket — penambahan ke keranjang wajib menyertakan
+  /// `props` sebanyak [maxQty] varian.
+  bool get isPackage => menuType.toLowerCase() == 'package';
 
   /// Harga normal dalam Rupiah (tanpa desimal).
   final int price;
@@ -66,6 +91,10 @@ class Product {
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        'code': code,
+        'categoryId': categoryId,
+        'menuType': menuType,
+        'maxQty': maxQty,
         'name': name,
         'category': category,
         'price': price,
@@ -77,4 +106,25 @@ class Product {
         'badge': badge,
         'imageUrl': imageUrl,
       };
+}
+
+/// Satu pilihan varian di dalam sebuah paket (`props` pada endpoint menu).
+class MenuVariant {
+  const MenuVariant({
+    required this.id,
+    required this.title,
+    this.code = '',
+  });
+
+  /// `menu_id` yang dikirim saat menambah paket ke keranjang.
+  final int id;
+
+  final String title;
+  final String code;
+
+  factory MenuVariant.fromJson(Map<String, dynamic> json) => MenuVariant(
+        id: int.tryParse(json['id']?.toString() ?? '') ?? 0,
+        title: (json['title'] ?? json['name'] ?? '').toString(),
+        code: (json['code'] ?? '').toString(),
+      );
 }
